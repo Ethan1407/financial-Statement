@@ -1,11 +1,10 @@
 <!DOCTYPE html>
 <html lang="zh-TW" data-theme="dark">
 <head>
-  <!-- Vercel Web Analytics -->
-  <script defer src="/_vercel/insights/script.js"></script>
   <meta charset="UTF-8">
   <title>規則與說明 - 財報健檢</title>
   <link rel="stylesheet" href="css/style.css">
+  <script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body>
   <header>
@@ -15,36 +14,79 @@
         <a href="index.html">我的自選股</a>
         <a href="alerts.html">警訊總覽</a>
         <a href="details.html">個股詳情</a>
-        <a href="rules.html">規則與說明</a>
+        <a href="rules.html" class="active">規則與說明</a>
       </nav>
       <button class="theme-toggle" onclick="toggleTheme()">🌓</button>
     </div>
   </header>
   <main>
-    <div class="card" style="margin-bottom: 16px;">
-      <h3>📊 系統更新資訊</h3>
-      <p style="margin-top: 8px;">資料庫最後更新日期：<strong id="info-date">--</strong></p>
-      <p>最新財報季度：<strong id="info-q">--</strong></p>
-      <p style="margin-top: 8px; color: var(--text-light); font-size: 0.9rem;">
-        ⚠️ <strong>注意：</strong>台股看盤軟體習慣以「紅漲綠跌」標示價格，但本站為「財報風險指標」，因此燈號顏色定義為國際通用標準：<strong>綠色代表正常健康，紅色代表風險警戒</strong>。
+    <div class="card" style="margin-bottom: 24px;">
+      <h2>系統基礎運作說明</h2>
+      <p style="margin-top: 8px; color: var(--text-light); line-height: 1.6;">
+        本系統資料來源為 FinMind API。判斷門檻會根據「公司產業類型」進行動態適配，以減少因為產業特性帶來的誤判。<br>
+        最後更新日期：<span id="info-date"></span>。
       </p>
     </div>
-    <div class="card">
-      <h3>🚨 警訊規則定義</h3>
+
+    <!-- 產業分類覆蓋規則表 -->
+    <div class="card" style="margin-bottom: 24px;">
+      <h3>🏢 產業類型檢驗差異</h3>
+      <p style="margin: 8px 0 16px 0; color: var(--text-light); font-size: 0.9rem;">不同類型的公司套用以下不同標準。您可以在「個股詳情」中手動為公司更改類型。</p>
       <div class="table-responsive">
         <table>
           <thead>
-            <tr><th style="width: 120px;">嚴重程度</th><th style="width: 150px;">規則名稱</th><th>判斷條件</th><th>為什麼重要</th></tr>
+            <tr><th style="width: 25%">公司類型</th><th>調整與覆蓋說明</th></tr>
           </thead>
-          <tbody id="rules-table-body"></tbody>
+          <tbody id="type-table-body">
+            <!-- JS 動態生成 -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 基礎警訊門檻表 -->
+    <div class="card">
+      <h3>⚠️ 基礎警訊判斷標準 (一般類型)</h3>
+      <div class="table-responsive" style="margin-top: 16px;">
+        <table>
+          <thead>
+            <tr><th style="width: 15%">嚴重程度</th><th style="width: 25%">警訊名稱</th><th>具體判斷條件與門檻</th></tr>
+          </thead>
+          <tbody id="rules-table-body">
+            <!-- JS 動態生成 -->
+          </tbody>
         </table>
       </div>
     </div>
   </main>
 
-  <script src="js/data.js"></script>
   <script src="js/rules.js"></script>
   <script src="js/app.js"></script>
-  <script> initRules(); </script>
+  <script>
+    function initRules() {
+      document.getElementById('info-date').innerText = new Date().toISOString().split('T')[0];
+
+      // 渲染產業類型表
+      const typeBody = document.getElementById('type-table-body');
+      typeBody.innerHTML = '';
+      for (const key in TYPE_PROFILES) {
+          const t = TYPE_PROFILES[key];
+          typeBody.innerHTML += `<tr><td><strong>${t.label}</strong></td><td>${t.desc}</td></tr>`;
+      }
+
+      // 渲染規則表 (使用 RULES_CONFIG 的預設參數生成)
+      const rulesBody = document.getElementById('rules-table-body');
+      rulesBody.innerHTML = '';
+      for (const key in RULES_CONFIG) {
+          const r = RULES_CONFIG[key];
+          const badgeClass = r.level === 'red' ? 'red' : 'yellow';
+          const badgeText = r.level === 'red' ? '紅燈 (警戒)' : '黃燈 (注意)';
+          // 呼叫 why() 函式取得目前寫在物件裡的實際數字門檻
+          const desc = typeof r.why === 'function' ? r.why(r) : r.why;
+          rulesBody.innerHTML += `<tr><td><span class="badge ${badgeClass}">${badgeText}</span></td><td><strong>${r.name}</strong></td><td>${desc}</td></tr>`;
+      }
+    }
+    initRules();
+  </script>
 </body>
 </html>

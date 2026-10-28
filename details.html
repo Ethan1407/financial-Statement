@@ -1,12 +1,11 @@
 <!DOCTYPE html>
 <html lang="zh-TW" data-theme="dark">
 <head>
-  <!-- Vercel Web Analytics -->
-  <script defer src="/_vercel/insights/script.js"></script>
   <meta charset="UTF-8">
   <title>個股詳情 - 財報健檢</title>
   <link rel="stylesheet" href="css/style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script defer src="/_vercel/insights/script.js"></script>
 </head>
 <body>
   <header>
@@ -24,12 +23,9 @@
   <main>
     <div class="flex-between" style="margin-bottom: 16px;">
       <a href="index.html" class="btn-outline" style="text-decoration:none;">← 返回自選股</a>
-      <select id="detail-stock-select" onchange="changeDetailStock(this.value)">
-        <!-- JS 動態生成 -->
-      </select>
+      <select id="detail-stock-select" onchange="changeDetailStock(this.value)"></select>
     </div>
 
-    <!-- 這是進入頁面預設顯示的清單 -->
     <div id="detail-list-view" style="display: block;">
       <h3 style="margin-bottom: 16px;">請選擇要查看詳情的股票：</h3>
       <div id="detail-stock-list" class="grid-3"></div>
@@ -38,7 +34,6 @@
       </div>
     </div>
 
-    <!-- 這是點擊股票後才會顯示的詳細圖表區塊 -->
     <div id="detail-content" style="display:none;">
       <div class="card" style="margin-bottom: 16px;">
         <div class="flex-between">
@@ -50,7 +45,21 @@
             <p id="detail-industry">產業: --</p>
           </div>
         </div>
-        <div id="detail-alerts-summary" style="margin-top: 12px; font-size: 0.9rem;"></div>
+        
+        <!-- 【新增】公司類型手動調整區塊 -->
+        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
+          <label for="company-type-select" style="color: var(--text-light); font-size: 0.9rem;">檢驗標準覆蓋：</label>
+          <select id="company-type-select" style="padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text);" onchange="overrideCompanyType(window.currentStockId, this.value)">
+            <option value="general">一般</option>
+            <option value="electronics">電子製造/半導體</option>
+            <option value="cyclical">傳產/景氣循環</option>
+            <option value="growth">成長股</option>
+            <option value="dividend">高股息/存股型</option>
+          </select>
+          <p id="company-type-desc" style="font-size: 0.85rem; color: var(--text-light); margin-top: 8px;">--</p>
+        </div>
+
+        <div id="detail-alerts-summary" style="margin-top: 12px; font-size: 0.9rem; padding-top:12px; border-top: 1px dashed var(--border);"></div>
       </div>
 
       <div class="card">
@@ -60,7 +69,6 @@
           <button class="tab-btn" onclick="switchDetailTab('cashflow')">現金流量表</button>
         </div>
 
-        <!-- 損益表頁籤內容 -->
         <div id="tab-income" class="tab-content active">
           <div class="chart-container"><canvas id="chart-revenue"></canvas></div>
           <h4 style="margin-top: 24px;">損益表數據明細</h4>
@@ -72,7 +80,6 @@
           </div>
         </div>
 
-        <!-- 財務狀況表頁籤內容 -->
         <div id="tab-balance" class="tab-content">
           <div class="chart-container"><canvas id="chart-balance"></canvas></div>
           <h4 style="margin-top: 24px;">財務狀況表數據明細</h4>
@@ -84,7 +91,6 @@
           </div>
         </div>
 
-        <!-- 現金流量表頁籤內容 -->
         <div id="tab-cashflow" class="tab-content">
           <div class="chart-container"><canvas id="chart-cf"></canvas></div>
           <h4 style="margin-top: 24px;">現金流量表數據明細</h4>
@@ -95,7 +101,6 @@
             </table>
           </div>
         </div>
-        
       </div>
     </div>
   </main>

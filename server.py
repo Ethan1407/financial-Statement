@@ -71,7 +71,6 @@ def process_financials(stock_id):
             q_str = f"{date_obj.year}Q{((date_obj.month-1)//3) + 1}"
             if q_str not in merged_data:
                 merged_data[q_str] = {}
-            # 雙重儲存：API 給的英文 type 與原始中文名稱 origin_name
             merged_data[q_str][item["type"]] = item["value"]
             if "origin_name" in item:
                 merged_data[q_str][item["origin_name"]] = item["value"]
@@ -80,27 +79,40 @@ def process_financials(stock_id):
     process_raw_items(balance_data)
     process_raw_items(cashflow_data)
     
+    def get_single_quarter_cf(q_str, keys):
+        """將 FinMind 的累計現金流還原為單季數值"""
+        current_ytd = get_val(merged_data[q_str], keys)
+        # Q1 本身就是單季，不需要相減
+        if q_str.endswith("Q1"):
+            return current_ytd
+        
+        # 尋找同一年度的上一季
+        prev_q_str = q_str[:-1] + str(int(q_str[-1]) - 1)
+        if prev_q_str in merged_data:
+            prev_ytd = get_val(merged_data[prev_q_str], keys)
+            return current_ytd - prev_ytd
+        return current_ytd 
+    
     quarters_data = []
     for q_str in sorted(merged_data.keys()):
         row = merged_data[q_str]
         
-        # --- 損益表指標 (擴充金融股專用詞彙) ---
+        # --- 損益表指標 (針對 debug_names.json 擴充) ---
         revenue = get_val(row, ["Revenue", "營業收入", "營業收入合計", "收益合計", "淨收益", "利息淨收益"]) / 1000000
         cogs = get_val(row, ["CostOfGoodsSold", "營業成本", "營業成本合計"]) / 1000000
         gross_profit = get_val(row, ["GrossProfit", "營業毛利", "營業毛利(毛損)"]) / 1000000
-        operating_income = get_val(row, ["OperatingIncome", "營業利益", "營業利益(損失)", "稅前淨利", "繼續營業單位稅前淨利"]) / 1000000
-        net_income = get_val(row, ["IncomeAfterTaxes", "NetIncome", "本期淨利", "本期淨利(淨損)", "本期稅後淨利"]) / 1000000
+        operating_income = get_val(row, ["OperatingIncome", "營業利益", "營業利益(損失)", "稅前淨利", "繼續營業單位稅前損益", "PreTaxIncome"]) / 1000000
+        net_income = get_val(row, ["IncomeAfterTaxes", "IncomeAfterTax", "NetIncome", "本期淨利", "本期淨利(淨損)", "本期稅後淨利", "本期稅後淨利(淨損)"]) / 1000000
         eps = get_val(row, ["EPS", "基本每股盈餘", "基本每股盈餘(元)"])
         
         if gross_profit == 0 and revenue != 0 and cogs != 0:
             gross_profit = revenue - cogs
 
-        # --- 資產負債表指標 (含強制防呆引擎) ---
+        # --- 資產負債表指標 (新增 Liabilities 與 負債總) ---
         total_assets = get_val(row, ["TotalAssets", "資產總計", "資產總額"])
-        total_equity = get_val(row, ["TotalEquity", "權益總計", "權益總額", "權益", "母公司業主權益", "權益總計(淨值)"])
-        total_liabilities = get_val(row, ["TotalLiabilities", "負債總計", "負債總額", "負債"])
+        total_equity = get_val(row, ["TotalEquity", "Equity", "權益總計", "權益總額", "權益", "母公司業主權益", "權益總計(淨值)"])
+        total_liabilities = get_val(row, ["TotalLiabilities", "Liabilities", "負債總計", "負債總額", "負債", "負債總"])
         
-        # 如果負債完全抓不到，或是因錯誤導致 100% 等於資產，強制透過「資產 - 權益」還原真相
         if (total_liabilities == 0 or total_liabilities == total_assets) and total_equity > 0:
             total_liabilities = total_assets - total_equity
             
@@ -111,9 +123,12 @@ def process_financials(stock_id):
         ar = get_val(row, ["AccountsReceivableNet", "AccountsReceivable", "應收帳款淨額", "應收帳款", "應收款項淨額"]) / 1000000
         inv = get_val(row, ["Inventories", "Inventory", "存貨", "存貨淨額"]) / 1000000
         
-        # --- 現金流量表指標 ---
-        operating_cf = get_val(row, ["NetCashFlowsFromOperatingActivities", "營業活動之淨現金流入", "營業活動之淨現金流入(流出)", "營業活動之現金流量－淨額"]) / 1000000
-        investing_cf = get_val(row, ["NetCashFlowsFromInvestingActivities", "投資活動之淨現金流入", "投資活動之淨現金流入(流出)", "投資活動之現金流量－淨額"]) / 1000000
+        # --- 現金流量表指標 (套用單季還原演算法) ---
+        op_cf_keys = ["NetCashFlowsFromOperatingActivities", "NetCashInflowFromOperatingActivities", "CashFlowsFromOperatingActivities", "營業活動之淨現金流入", "營業活動之淨現金流入(流出)", "營業活動之現金流量－淨額"]
+        inv_cf_keys = ["NetCashFlowsFromInvestingActivities", "CashProvidedByInvestingActivities", "投資活動之淨現金流入", "投資活動之淨現金流入(流出)", "投資活動之現金流量－淨額"]
+        
+        operating_cf = get_single_quarter_cf(q_str, op_cf_keys) / 1000000
+        investing_cf = get_single_quarter_cf(q_str, inv_cf_keys) / 1000000
         
         if operating_cf == 0 and net_income != 0:
             operating_cf = net_income * 1.2

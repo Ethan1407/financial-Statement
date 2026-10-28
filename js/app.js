@@ -1,4 +1,3 @@
-// 全局狀態管理
 let portfolio = JSON.parse(localStorage.getItem('stock_portfolio') || '[]');
 let currentCharts = {};
 
@@ -26,68 +25,54 @@ function setActiveNav() {
   });
 }
 
-function savePortfolio() { 
-    localStorage.setItem('stock_portfolio', JSON.stringify(portfolio)); 
-}
+function savePortfolio() { localStorage.setItem('stock_portfolio', JSON.stringify(portfolio)); }
 
-// --- 首頁專用邏輯 ---
-function initPortfolio() {
-  renderPortfolio();
-}
+function initPortfolio() { renderPortfolio(); }
 
 async function addStock() {
   const input = document.getElementById('stock-input');
   const id = input.value.trim();
   const btn = input.nextElementSibling; 
-
   if (!id) return;
 
   let stockDatabase = JSON.parse(localStorage.getItem('stock_database') || '{}');
   if (portfolio.includes(id) && stockDatabase[id]) {
-      alert('此股票已在自選清單中！');
-      input.value = '';
-      return;
+      alert('此股票已在自選清單中！'); input.value = ''; return;
   }
 
   const originalText = btn.innerText;
-  btn.innerText = '爬取中...';
-  btn.disabled = true;
+  btn.innerText = '爬取中...'; btn.disabled = true;
 
   try {
-    const response = await fetch(`https://financial-statement-xou2.onrender.com/api/stock/${id}`);
+    const response = await fetch(`https://ethan-stock-api.onrender.com/api/stock/${id}`);
     const result = await response.json();
-
-    if (!response.ok) {
-        alert(result.error || '爬取失敗，請確認代號正確');
-        return;
-    }
+    if (!response.ok) { alert(result.error || '爬取失敗，請確認代號正確'); return; }
 
     stockDatabase[id] = result;
     localStorage.setItem('stock_database', JSON.stringify(stockDatabase));
 
-    if (!portfolio.includes(id)) {
-        portfolio.push(id);
-        savePortfolio();
-    }
-    
+    if (!portfolio.includes(id)) { portfolio.push(id); savePortfolio(); }
     renderPortfolio();
     if (typeof updateDetailSelect === 'function') updateDetailSelect();
-
   } catch (err) {
-    alert('無法連線到 Python 伺服器！請確認終端機裡的 server.py 有啟動。');
+    alert('無法連線到 Python 伺服器！');
   } finally {
-    btn.innerText = originalText;
-    btn.disabled = false;
-    input.value = '';
+    btn.innerText = originalText; btn.disabled = false; input.value = '';
   }
 }
 
 function removeStock(id) {
   if (confirm(`確定移除 ${id}？`)) { 
       portfolio = portfolio.filter(item => item !== id); 
-      savePortfolio(); 
-      renderPortfolio(); 
+      savePortfolio(); renderPortfolio(); 
   }
+}
+
+function overrideCompanyType(stockId, newType) {
+    const overrides = JSON.parse(localStorage.getItem('typeOverrides') || '{}');
+    overrides[stockId] = newType;
+    localStorage.setItem('typeOverrides', JSON.stringify(overrides));
+    loadDetailView(stockId);
 }
 
 function renderPortfolio() {
@@ -109,10 +94,15 @@ function renderPortfolio() {
   list.forEach(item => {
     const latest = item.data.quarters[item.data.quarters.length - 1];
     let statusText = item.status === 'red' ? '警戒' : (item.status === 'yellow' ? '注意' : '正常');
+    const typeLabel = TYPE_PROFILES[item.effectiveType].label;
+    
     grid.innerHTML += `
       <div class="card" style="border-top: 4px solid var(--${item.status})">
         <div class="flex-between" style="margin-bottom: 12px;">
-          <h3 style="margin:0">${item.id} ${item.data.name}</h3>
+          <h3 style="margin:0; display:flex; align-items:center; gap:8px;">
+            ${item.id} ${item.data.name} 
+            <span style="font-size:0.75rem; padding:2px 6px; background:var(--primary); color:#fff; border-radius:4px; font-weight:normal;">${typeLabel}</span>
+          </h3>
           <span class="status-indicator"><span class="dot ${item.status}"></span> ${statusText}</span>
         </div>
         <div style="font-size: 0.9rem; color: var(--text-light); margin-bottom: 16px;">
@@ -130,7 +120,6 @@ function renderPortfolio() {
   });
 }
 
-// --- 警訊總覽專用邏輯 ---
 function initAlerts() { renderAlerts(); }
 
 function renderAlerts() {
@@ -139,27 +128,21 @@ function renderAlerts() {
   if (!container) return;
   const mode = document.getElementById('alert-filter').value;
   container.innerHTML = '';
-  
   let hasAnyAlert = false;
 
-  // 模式 1：依公司分組 (卡片式)
   if (mode === 'group') {
     portfolio.sort((a, b) => a.localeCompare(b)).forEach(id => {
       const analysis = analyzeStock(id);
       if (analysis && analysis.alerts && analysis.alerts.length > 0) {
         hasAnyAlert = true;
-        
-        // 公司內的警訊依然保持紅燈優先排序
         let compAlerts = analysis.alerts.slice().sort((a, b) => a.rule.level === 'red' ? -1 : 1);
-        
         let alertsHtml = compAlerts.map(a => {
           const badgeClass = a.rule.level === 'red' ? 'red' : 'yellow';
           const badgeText = a.rule.level === 'red' ? '紅燈' : '黃燈';
           return `
             <a href="details.html?id=${id}&tab=${a.detail.tab}" class="alert-item ${a.rule.level}" style="display:block; color:inherit; margin-top: 8px;">
               <div class="flex-between" style="margin-bottom: 4px;">
-                <strong>${a.rule.name}</strong>
-                <span class="badge ${badgeClass}">${badgeText}</span>
+                <strong>${a.rule.name}</strong><span class="badge ${badgeClass}">${badgeText}</span>
               </div>
               <p style="font-size: 0.9rem; color: var(--text-light);">${a.detail.text}</p>
             </a>
@@ -169,17 +152,14 @@ function renderAlerts() {
         container.innerHTML += `
           <div class="card" style="margin-bottom: 16px; border-top: 4px solid var(--${analysis.status})">
             <h3 style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
-              <span>${id} ${analysis.data.name}</span>
-              <span class="badge ${analysis.status}">${analysis.alerts.length} 項警訊</span>
+              <span>${id} ${analysis.data.name}</span><span class="badge ${analysis.status}">${analysis.alerts.length} 項警訊</span>
             </h3>
             ${alertsHtml}
           </div>
         `;
       }
     });
-  } 
-  // 模式 2：扁平化排序 (依嚴重程度 / 僅紅燈 / 僅黃燈)
-  else {
+  } else {
     let allAlerts = [];
     portfolio.forEach(id => {
       const analysis = analyzeStock(id);
@@ -187,26 +167,19 @@ function renderAlerts() {
         analysis.alerts.forEach(a => { allAlerts.push({ stockId: id, stockName: analysis.data.name, ...a }); });
       }
     });
-
-    if (mode === 'red' || mode === 'yellow') {
-      allAlerts = allAlerts.filter(a => a.rule.level === mode);
-    }
-
+    if (mode === 'red' || mode === 'yellow') allAlerts = allAlerts.filter(a => a.rule.level === mode);
     allAlerts.sort((a, b) => {
       if(a.rule.level === b.rule.level) return a.stockId.localeCompare(b.stockId);
       return a.rule.level === 'red' ? -1 : 1;
     });
-
     if (allAlerts.length > 0) hasAnyAlert = true;
-
     allAlerts.forEach(a => {
       const badgeClass = a.rule.level === 'red' ? 'red' : 'yellow';
       const badgeText = a.rule.level === 'red' ? '紅燈' : '黃燈';
       container.innerHTML += `
         <a href="details.html?id=${a.stockId}&tab=${a.detail.tab}" class="alert-item ${a.rule.level}" style="display:block; color:inherit;">
           <div class="flex-between" style="margin-bottom: 4px;">
-            <strong>${a.stockId} ${a.stockName} - ${a.rule.name}</strong>
-            <span class="badge ${badgeClass}">${badgeText}</span>
+            <strong>${a.stockId} ${a.stockName} - ${a.rule.name}</strong><span class="badge ${badgeClass}">${badgeText}</span>
           </div>
           <p style="font-size: 0.9rem; color: var(--text-light);">${a.detail.text}</p>
         </a>
@@ -214,15 +187,9 @@ function renderAlerts() {
     });
   }
 
-  // 顯示空狀態處理
-  if (!hasAnyAlert) { 
-    empty.style.display = 'block'; 
-  } else {
-    empty.style.display = 'none';
-  }
+  if (!hasAnyAlert) empty.style.display = 'block'; else empty.style.display = 'none';
 }
 
-// --- 個股詳情專用邏輯 ---
 function initDetails() {
   updateDetailSelect();
   const urlParams = new URLSearchParams(window.location.search);
@@ -244,19 +211,10 @@ function initDetails() {
 function renderDetailStockList() {
   const listContainer = document.getElementById('detail-stock-list');
   const emptyMsg = document.getElementById('detail-list-empty');
-  
-  if (portfolio.length === 0) {
-    listContainer.style.display = 'none';
-    emptyMsg.style.display = 'block';
-    return;
-  }
-  
-  listContainer.style.display = 'grid';
-  emptyMsg.style.display = 'none';
-  listContainer.innerHTML = '';
+  if (portfolio.length === 0) { listContainer.style.display = 'none'; emptyMsg.style.display = 'block'; return; }
+  listContainer.style.display = 'grid'; emptyMsg.style.display = 'none'; listContainer.innerHTML = '';
   
   const stockDatabase = JSON.parse(localStorage.getItem('stock_database') || '{}');
-  
   portfolio.sort((a,b) => a.localeCompare(b)).forEach(id => {
     const data = stockDatabase[id];
     if (data) {
@@ -278,9 +236,7 @@ function updateDetailSelect() {
   sel.innerHTML = '<option value="">請選擇股票...</option>';
   const stockDatabase = JSON.parse(localStorage.getItem('stock_database') || '{}');
   portfolio.sort((a,b) => a.localeCompare(b)).forEach(id => { 
-      if(stockDatabase[id]) {
-          sel.innerHTML += `<option value="${id}">${id} ${stockDatabase[id].name}</option>`; 
-      }
+      if(stockDatabase[id]) sel.innerHTML += `<option value="${id}">${id} ${stockDatabase[id].name}</option>`; 
   });
   if(portfolio.includes(currentVal)) sel.value = currentVal;
 }
@@ -312,6 +268,10 @@ function loadDetailView(stockId) {
   document.getElementById('detail-dot').className = `dot ${analysis.status}`;
   document.getElementById('detail-status-text').innerText = analysis.status === 'red' ? '警戒狀態' : (analysis.status === 'yellow' ? '注意狀態' : '正常健康');
   
+  // 更新類型下拉選單與描述
+  document.getElementById('company-type-select').value = analysis.effectiveType;
+  document.getElementById('company-type-desc').innerText = TYPE_PROFILES[analysis.effectiveType].desc;
+
   const alertsSum = document.getElementById('detail-alerts-summary');
   if (analysis.alerts.length === 0) { alertsSum.innerHTML = '<span style="color:var(--green)">✓ 財報表現良好，未觸發任何警訊。</span>'; } 
   else { alertsSum.innerHTML = analysis.alerts.map(a => `<div style="margin-top:4px;">⚠️ <strong>${a.rule.name}</strong>: ${a.detail.text}</div>`).join(''); }
@@ -320,9 +280,7 @@ function loadDetailView(stockId) {
   const tbodyBalance = document.querySelector('#table-balance tbody');
   const tbodyCashflow = document.querySelector('#table-cashflow tbody');
   
-  tbodyIncome.innerHTML = '';
-  tbodyBalance.innerHTML = '';
-  tbodyCashflow.innerHTML = '';
+  tbodyIncome.innerHTML = ''; tbodyBalance.innerHTML = ''; tbodyCashflow.innerHTML = '';
 
   [...analysis.data.quarters].reverse().forEach(q => {
     tbodyIncome.innerHTML += `<tr><td>${q.q}</td><td>${q.revenue}</td><td>${q.revenueYoY}%</td><td>${q.grossMargin}%</td><td>${q.operatingMargin}%</td><td>${q.netIncome}</td><td>${q.eps}</td></tr>`;
@@ -377,16 +335,4 @@ function renderCharts(stockId, alerts = []) {
     { label: '營業現金流 (百萬)', data: data.map(q=>q.operatingCF), backgroundColor: 'rgba(16, 185, 129, 0.7)' },
     { label: '自由現金流 (百萬)', data: data.map(q=>q.freeCF), backgroundColor: 'rgba(59, 130, 246, 0.7)' }
   ]);
-}
-
-// --- 規則頁專用邏輯 ---
-function initRules() {
-  document.getElementById('info-date').innerText = new Date().toISOString().split('T')[0];
-  document.getElementById('info-q').innerText = "即時更新";
-  const tbody = document.getElementById('rules-table-body');
-  RULES.forEach(r => {
-    const badgeClass = r.level === 'red' ? 'red' : 'yellow';
-    const badgeText = r.level === 'red' ? '紅燈 (警戒)' : '黃燈 (注意)';
-    tbody.innerHTML += `<tr><td><span class="badge ${badgeClass}">${badgeText}</span></td><td><strong>${r.name}</strong></td><td>依公式動態判斷</td><td>${r.reason}</td></tr>`;
-  });
 }
