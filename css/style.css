@@ -1,0 +1,89 @@
+/* ================= 變數與基礎設定 ================= */
+:root {
+  --bg: #f4f5f7;
+  --card-bg: #ffffff;
+  --text: #1f2937;
+  --text-light: #6b7280;
+  --border: #e5e7eb;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --red: #ef4444;
+  --yellow: #f59e0b;
+  --green: #10b981;
+  --nav-bg: #ffffff;
+  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+[data-theme="dark"] {
+  --bg: #111827;
+  --card-bg: #1f2937;
+  --text: #f9fafb;
+  --text-light: #9ca3af;
+  --border: #374151;
+  --primary: #3b82f6;
+  --primary-hover: #60a5fa;
+  --nav-bg: #1f2937;
+  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+body { background-color: var(--bg); color: var(--text); transition: background-color 0.3s, color 0.3s; }
+a { text-decoration: none; color: var(--primary); cursor: pointer; }
+button { cursor: pointer; border: none; border-radius: 4px; padding: 8px 12px; font-weight: bold; transition: 0.2s; }
+button.btn-primary { background-color: var(--primary); color: #fff; }
+button.btn-primary:hover { background-color: var(--primary-hover); }
+button.btn-outline { background-color: transparent; border: 1px solid var(--border); color: var(--text); }
+button.btn-outline:hover { border-color: var(--primary); color: var(--primary); }
+input, select { padding: 8px; border: 1px solid var(--border); border-radius: 4px; background-color: var(--card-bg); color: var(--text); }
+
+/* ================= 導覽列 ================= */
+header { background-color: var(--nav-bg); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 100; box-shadow: var(--shadow); }
+.nav-container { max-width: 1200px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; flex-wrap: wrap; }
+.logo { font-size: 1.25rem; font-weight: bold; color: var(--primary); }
+.nav-links { display: flex; gap: 16px; overflow-x: auto; white-space: nowrap; padding: 8px 0; }
+.nav-links a { color: var(--text-light); padding: 6px 10px; border-radius: 4px; text-decoration: none; }
+.nav-links a.active { color: var(--primary); background-color: rgba(59, 130, 246, 0.1); font-weight: bold; }
+.theme-toggle { background: transparent; color: var(--text); font-size: 1.2rem; }
+
+/* ================= 版面佈局 ================= */
+main { max-width: 1200px; margin: 24px auto; padding: 0 20px; min-height: 80vh; }
+.card { background-color: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; box-shadow: var(--shadow); margin-bottom: 16px; }
+.flex-between { display: flex; justify-content: space-between; align-items: center; }
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-top: 16px; }
+
+/* ================= 標籤與燈號 ================= */
+.badge { 
+  padding: 4px 8px; 
+  border-radius: 12px; 
+  font-size: 0.75rem; 
+  font-weight: bold; 
+  color: #fff; 
+  white-space: nowrap; 
+  display: inline-block; 
+}
+.badge.green { background-color: var(--green); }
+.badge.yellow { background-color: var(--yellow); }
+.badge.red { background-color: var(--red); }
+.status-indicator { display: inline-flex; align-items: center; gap: 6px; font-weight: bold; }
+.dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+.dot.green { background-color: var(--green); box-shadow: 0 0 8px var(--green); }
+.dot.yellow { background-color: var(--yellow); box-shadow: 0 0 8px var(--yellow); }
+.dot.red { background-color: var(--red); box-shadow: 0 0 8px var(--red); }
+
+/* ================= 表格 ================= */
+.table-responsive { overflow-x: auto; margin-top: 16px; }
+table { width: 100%; border-collapse: collapse; min-width: 600px; }
+th, td { padding: 12px; border-bottom: 1px solid var(--border); text-align: left; }
+th { background-color: rgba(0,0,0,0.02); color: var(--text-light); font-weight: normal; }
+[data-theme="dark"] th { background-color: rgba(255,255,255,0.02); }
+
+/* ================= 頁籤 (Tab) ================= */
+.tabs { display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.tab-btn { background: transparent; color: var(--text-light); border: none; border-bottom: 2px solid transparent; padding: 8px 16px; border-radius: 0; }
+.tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: bold; }
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+/* ================= 警訊與圖表 ================= */
+.chart-container { position: relative; height: 300px; width: 100%; margin-bottom: 24px; }
+.empty-state { text-align: center; padding: 40px; color: var(--text-light); }
+.alert-item { padding: 12px; border-left: 4px solid transparent; margin-bottom: 8px; background-color: var(--card-bg); cursor: pointer; transition: 0.2s; border-radius: 0 4px 4px 0; border: 1px solid var

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-TW" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <title>警訊總覽 - 財報健檢</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header>
+    <div class="nav-container">
+      <div class="logo">📈 財報健檢儀表板</div>
+      <nav class="nav-links">
+        <a href="index.html">我的自選股</a>
+        <a href="alerts.html">警訊總覽</a>
+        <a href="details.html">個股詳情</a>
+        <a href="rules.html">規則與說明</a>
+      </nav>
+      <button class="theme-toggle" onclick="toggleTheme()">🌓</button>
+    </div>
+  </header>
+  <main>
+    <div class="card flex-between" style="margin-bottom: 16px;">
+      <h3>⚠️ 觸發警訊總覽</h3>
+      <select id="alert-filter" onchange="renderAlerts()">
+        <option value="group" selected>依公司分組</option>
+        <option value="severity">依嚴重程度排序</option>
+        <option value="red">僅顯示紅燈 (警戒)</option>
+        <option value="yellow">僅顯示黃燈 (注意)</option>
+      </select>
+    </div>
+    <div id="alerts-list"></div>
+    <div id="alerts-empty" class="empty-state" style="display:none;">
+      <p>目前自選股沒有觸發任何警訊 🎉</p>
+    </div>
+  </main>
+
+  <script src="js/rules.js"></script>
+  <script src="js/app.js"></script>
+  <script> initAlerts(); </script>
+</body>
+</html>

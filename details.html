@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-TW" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <title>個股詳情 - 財報健檢</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <header>
+    <div class="nav-container">
+      <div class="logo">📈 財報健檢儀表板</div>
+      <nav class="nav-links">
+        <a href="index.html">我的自選股</a>
+        <a href="alerts.html">警訊總覽</a>
+        <a href="details.html">個股詳情</a>
+        <a href="rules.html">規則與說明</a>
+      </nav>
+      <button class="theme-toggle" onclick="toggleTheme()">🌓</button>
+    </div>
+  </header>
+  <main>
+    <div class="flex-between" style="margin-bottom: 16px;">
+      <a href="index.html" class="btn-outline" style="text-decoration:none;">← 返回自選股</a>
+      <select id="detail-stock-select" onchange="changeDetailStock(this.value)">
+        <!-- JS 動態生成 -->
+      </select>
+    </div>
+
+    <!-- 這是進入頁面預設顯示的清單 -->
+    <div id="detail-list-view" style="display: block;">
+      <h3 style="margin-bottom: 16px;">請選擇要查看詳情的股票：</h3>
+      <div id="detail-stock-list" class="grid-3"></div>
+      <div id="detail-list-empty" class="empty-state" style="display:none;">
+        <p>目前自選股清單為空，請先到首頁新增股票。</p>
+      </div>
+    </div>
+
+    <!-- 這是點擊股票後才會顯示的詳細圖表區塊 -->
+    <div id="detail-content" style="display:none;">
+      <div class="card" style="margin-bottom: 16px;">
+        <div class="flex-between">
+          <div>
+            <h2 id="detail-name" style="margin-bottom: 8px;">--</h2>
+            <p class="status-indicator"><span id="detail-dot" class="dot"></span> <span id="detail-status-text">--</span></p>
+          </div>
+          <div style="text-align: right; color: var(--text-light); font-size: 0.9rem;">
+            <p id="detail-industry">產業: --</p>
+          </div>
+        </div>
+        <div id="detail-alerts-summary" style="margin-top: 12px; font-size: 0.9rem;"></div>
+      </div>
+
+      <div class="card">
+        <div class="tabs">
+          <button class="tab-btn active" onclick="switchDetailTab('income')">損益表</button>
+          <button class="tab-btn" onclick="switchDetailTab('balance')">財務狀況表</button>
+          <button class="tab-btn" onclick="switchDetailTab('cashflow')">現金流量表</button>
+        </div>
+
+        <!-- 損益表頁籤內容 -->
+        <div id="tab-income" class="tab-content active">
+          <div class="chart-container"><canvas id="chart-revenue"></canvas></div>
+          <h4 style="margin-top: 24px;">損益表數據明細</h4>
+          <div class="table-responsive">
+            <table id="table-income">
+              <thead><tr><th>季度</th><th>營收(百萬)</th><th>年增率</th><th>毛利率</th><th>營益率</th><th>淨利(百萬)</th><th>EPS</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 財務狀況表頁籤內容 -->
+        <div id="tab-balance" class="tab-content">
+          <div class="chart-container"><canvas id="chart-balance"></canvas></div>
+          <h4 style="margin-top: 24px;">財務狀況表數據明細</h4>
+          <div class="table-responsive">
+            <table id="table-balance">
+              <thead><tr><th>季度</th><th>負債比</th><th>流動比</th><th>應收天數</th><th>存貨天數</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 現金流量表頁籤內容 -->
+        <div id="tab-cashflow" class="tab-content">
+          <div class="chart-container"><canvas id="chart-cf"></canvas></div>
+          <h4 style="margin-top: 24px;">現金流量表數據明細</h4>
+          <div class="table-responsive">
+            <table id="table-cashflow">
+              <thead><tr><th>季度</th><th>營業現金流(百萬)</th><th>自由現金流(百萬)</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        
+      </div>
+    </div>
+  </main>
+
+  <script src="js/rules.js"></script>
+  <script src="js/app.js"></script>
+  <script> initDetails(); </script>
+</body>
+</html>
