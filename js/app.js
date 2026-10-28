@@ -1,9 +1,7 @@
-// 自動判斷目前環境：如果在自己的電腦測試就連 127.0.0.1，如果上雲端就連 Render
-const API_BASE_URL = (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost')
+const API_BASE = (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost')
     ? 'http://127.0.0.1:5000'
     : 'https://ethan-stock-api.onrender.com';
 
-// 全局狀態管理
 let portfolio = JSON.parse(localStorage.getItem('stock_portfolio') || '[]');
 let currentCharts = {};
 
@@ -32,7 +30,6 @@ function setActiveNav() {
 }
 
 function savePortfolio() { localStorage.setItem('stock_portfolio', JSON.stringify(portfolio)); }
-
 function initPortfolio() { renderPortfolio(); }
 
 async function addStock() {
@@ -50,7 +47,7 @@ async function addStock() {
   btn.innerText = '爬取中...'; btn.disabled = true;
 
   try {
-    const response = await fetch(`${API_BASE_URL}/api/stock/${id}`);
+    const response = await fetch(`${API_BASE}/api/stock/${id}`);
     const result = await response.json();
     if (!response.ok) { alert(result.error || '爬取失敗，請確認代號正確'); return; }
 
@@ -100,10 +97,17 @@ function renderPortfolio() {
   list.forEach(item => {
     const latest = item.data.quarters[item.data.quarters.length - 1];
     let statusText = item.status === 'red' ? '警戒' : (item.status === 'yellow' ? '注意' : '正常');
-    const typeLabel = TYPE_PROFILES[item.effectiveType].label;
+    const typeLabel = TYPE_PROFILES[item.effectiveType] ? TYPE_PROFILES[item.effectiveType].label : '一般';
+    const isFin = item.effectiveType === 'financial';
+    
+    const fmt = (val, inapp, suf) => {
+        if(isFin && inapp) return '不適用';
+        if(val === null || val === undefined) return '—';
+        return val + suf;
+    };
     
     grid.innerHTML += `
-      <div class="card" style="border-top: 4px solid var(--${item.status})">
+      <div class="card" style="border-top: 4px solid var(--${item.status}); position: relative;">
         <div class="flex-between" style="margin-bottom: 12px;">
           <h3 style="margin:0; display:flex; align-items:center; gap:8px;">
             ${item.id} ${item.data.name} 
@@ -112,11 +116,16 @@ function renderPortfolio() {
           <span class="status-indicator"><span class="dot ${item.status}"></span> ${statusText}</span>
         </div>
         <div style="font-size: 0.9rem; color: var(--text-light); margin-bottom: 16px;">
-          <div style="display:flex; justify-content:space-between;"><span>最新營收年增:</span> <strong style="color:var(--text)">${latest.revenueYoY}%</strong></div>
-          <div style="display:flex; justify-content:space-between;"><span>毛利率:</span> <strong style="color:var(--text)">${latest.grossMargin}%</strong></div>
-          <div style="display:flex; justify-content:space-between;"><span>負債比:</span> <strong style="color:var(--text)">${latest.debtRatio}%</strong></div>
+          <div style="display:flex; justify-content:space-between;"><span>最新營收年增:</span> <strong style="color:var(--text)">${fmt(latest.revenueYoY, false, '%')}</strong></div>
+          <div style="display:flex; justify-content:space-between;"><span>毛利率:</span> <strong style="color:var(--text)">${fmt(latest.grossMargin, true, '%')}</strong></div>
+          <div style="display:flex; justify-content:space-between;"><span>負債比:</span> <strong style="color:var(--text)">${fmt(latest.debtRatio, false, '%')}</strong></div>
         </div>
-        <div style="margin-bottom: 16px; font-size: 0.85rem;">觸發警訊數：<strong>${item.alerts.length}</strong> 項</div>
+        <div style="margin-bottom: 12px; font-size: 0.85rem; padding-bottom:12px; border-bottom:1px dashed var(--border);">
+            觸發警訊數：<strong>${item.alerts.length}</strong> 項
+        </div>
+        <div style="font-size: 0.85rem; color: var(--text-light); margin-bottom: 16px;">
+            📝 ${item.summary.short}
+        </div>
         <div class="flex-between">
           <a href="details.html?id=${item.id}" class="btn-primary" style="flex:1; margin-right: 8px; text-align:center;">查看詳情</a>
           <button class="btn-outline" style="color: var(--red); border-color: var(--red);" onclick="removeStock('${item.id}')">移除</button>
@@ -224,9 +233,15 @@ function renderDetailStockList() {
   portfolio.sort((a,b) => a.localeCompare(b)).forEach(id => {
     const data = stockDatabase[id];
     if (data) {
+      const overrides = JSON.parse(localStorage.getItem('typeOverrides') || '{}');
+      const effType = overrides[id] || (INDUSTRY_TO_TYPE[data.industry] || (data.isFinancial ? 'financial' : 'general'));
+      const typeLabel = TYPE_PROFILES[effType] ? TYPE_PROFILES[effType].label : '一般';
+      
       listContainer.innerHTML += `
         <div class="card" style="cursor: pointer; transition: 0.2s;" onclick="changeDetailStock('${id}')" onmouseover="this.style.borderColor='var(--primary)'" onmouseout="this.style.borderColor='var(--border)'">
-          <h3 style="margin: 0 0 8px 0;">${id} ${data.name}</h3>
+          <h3 style="margin: 0 0 8px 0; display:flex; align-items:center; gap:8px;">${id} ${data.name}
+            <span style="font-size:0.75rem; padding:2px 6px; background:var(--primary); color:#fff; border-radius:4px; font-weight:normal;">${typeLabel}</span>
+          </h3>
           <p style="color: var(--text-light); font-size: 0.9rem;">產業: ${data.industry}</p>
           <p style="color: var(--primary); font-size: 0.9rem; margin-top: 12px; font-weight: bold;">查看圖表與數據 →</p>
         </div>
@@ -264,6 +279,7 @@ function loadDetailView(stockId) {
   if(!analysis) return;
   window.currentStockId = stockId;
   window.currentAlerts = analysis.alerts;
+  window.currentAnalysis = analysis;
   
   const listView = document.getElementById('detail-list-view');
   if(listView) listView.style.display = 'none';
@@ -274,39 +290,126 @@ function loadDetailView(stockId) {
   document.getElementById('detail-dot').className = `dot ${analysis.status}`;
   document.getElementById('detail-status-text').innerText = analysis.status === 'red' ? '警戒狀態' : (analysis.status === 'yellow' ? '注意狀態' : '正常健康');
   
-  // 更新類型下拉選單與描述
   document.getElementById('company-type-select').value = analysis.effectiveType;
   document.getElementById('company-type-desc').innerText = TYPE_PROFILES[analysis.effectiveType].desc;
 
-  const alertsSum = document.getElementById('detail-alerts-summary');
-  if (analysis.alerts.length === 0) { alertsSum.innerHTML = '<span style="color:var(--green)">✓ 財報表現良好，未觸發任何警訊。</span>'; } 
-  else { alertsSum.innerHTML = analysis.alerts.map(a => `<div style="margin-top:4px;">⚠️ <strong>${a.rule.name}</strong>: ${a.detail.text}</div>`).join(''); }
+  // 白話文摘要區塊
+  document.getElementById('detail-plain-summary').innerHTML = `
+    <div style="background: var(--bg); padding: 12px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 12px;">
+      <h4 style="margin:0 0 8px 0;">💬 AI 財報白話解析</h4>
+      <p style="margin:0; color: var(--text-light); line-height: 1.5; font-size: 0.95rem;">${analysis.summary.detail}</p>
+    </div>
+  `;
+
+  // 警訊列表
+  let alertsSumHtml = '';
+  if (analysis.alerts.length === 0) { alertsSumHtml = '<span style="color:var(--green)">✓ 財報表現良好，未觸發任何警訊。</span>'; } 
+  else { alertsSumHtml = analysis.alerts.map(a => `<div style="margin-top:4px;">⚠️ <strong>${a.rule.name}</strong>: ${a.detail.text}</div>`).join(''); }
+  document.getElementById('detail-alerts-summary').innerHTML = alertsSumHtml;
 
   const tbodyIncome = document.querySelector('#table-income tbody');
   const tbodyBalance = document.querySelector('#table-balance tbody');
   const tbodyCashflow = document.querySelector('#table-cashflow tbody');
-  
   tbodyIncome.innerHTML = ''; tbodyBalance.innerHTML = ''; tbodyCashflow.innerHTML = '';
 
+  const isFin = analysis.effectiveType === 'financial';
+  const fmt = (val, inapplicable=false, suffix='') => {
+      if (isFin && inapplicable) return '不適用';
+      if (val === null || val === undefined) return '—';
+      return val + suffix;
+  };
+
   [...analysis.data.quarters].reverse().forEach(q => {
-    tbodyIncome.innerHTML += `<tr><td>${q.q}</td><td>${q.revenue}</td><td>${q.revenueYoY}%</td><td>${q.grossMargin}%</td><td>${q.operatingMargin}%</td><td>${q.netIncome}</td><td>${q.eps}</td></tr>`;
-    tbodyBalance.innerHTML += `<tr><td>${q.q}</td><td>${q.debtRatio}%</td><td>${q.currentRatio}</td><td>${q.arDays}</td><td>${q.invDays}</td></tr>`;
-    tbodyCashflow.innerHTML += `<tr><td>${q.q}</td><td>${q.operatingCF}</td><td>${q.freeCF}</td></tr>`;
+    tbodyIncome.innerHTML += `<tr><td>${q.q}</td><td>${fmt(q.revenue)}</td><td>${fmt(q.revenueYoY, false, '%')}</td><td>${fmt(q.grossMargin, true, '%')}</td><td>${fmt(q.operatingMargin, false, '%')}</td><td>${fmt(q.netIncome)}</td><td>${fmt(q.eps)}</td></tr>`;
+    tbodyBalance.innerHTML += `<tr><td>${q.q}</td><td>${fmt(q.debtRatio, false, '%')}</td><td>${fmt(q.currentRatio, true)}</td><td>${fmt(q.arDays, true)}</td><td>${fmt(q.invDays, true)}</td></tr>`;
+    tbodyCashflow.innerHTML += `<tr><td>${q.q}</td><td>${fmt(q.operatingCF)}</td><td>${fmt(q.freeCF, true)}</td></tr>`;
   });
 
   renderCharts(stockId, analysis.alerts);
 }
 
 function renderCharts(stockId, alerts = []) {
-  const stockDatabase = JSON.parse(localStorage.getItem('stock_database') || '{}');
-  const data = stockDatabase[stockId].quarters;
+  const analysis = window.currentAnalysis;
+  const data = analysis.data.quarters;
   const labels = data.map(q => q.q);
   const style = getComputedStyle(document.body);
   const textColor = style.getPropertyValue('--text').trim();
   const gridColor = style.getPropertyValue('--border').trim();
   
+  // 1. 處理雷達圖邏輯
+  const radarContainer = document.getElementById('radar-container');
+  const radarMsg = document.getElementById('radar-financial-msg');
+  const scoreList = document.getElementById('radar-score-list');
+  
+  if (analysis.effectiveType === 'financial') {
+      radarContainer.style.display = 'none';
+      radarMsg.style.display = 'block';
+      radarMsg.innerText = "金融業報表結構不同，暫不提供雷達圖";
+  } else {
+      radarContainer.style.display = 'flex';
+      radarMsg.style.display = 'none';
+      
+      const myScores = calcHealthScores(data);
+      const dims = ['獲利力', '成長力', '償債力', '現金流品質', '營運效率'];
+      
+      // 計算同儕平均 (同類別且非金融，超過兩筆才啟用)
+      let peerScores = [SCORE_CONFIG.baseline, SCORE_CONFIG.baseline, SCORE_CONFIG.baseline, SCORE_CONFIG.baseline, SCORE_CONFIG.baseline];
+      let peerLabel = '參考基準線';
+      
+      let peers = portfolio.filter(id => {
+          let pAnal = analyzeStock(id);
+          return pAnal && pAnal.effectiveType === analysis.effectiveType;
+      });
+      
+      if (peers.length >= 2) {
+          let total = [0,0,0,0,0], counts = [0,0,0,0,0];
+          peers.forEach(id => {
+              let pAnal = analyzeStock(id);
+              if(pAnal.effectiveType !== 'financial') {
+                  let s = calcHealthScores(pAnal.data.quarters);
+                  if(s) { for(let i=0; i<5; i++) { if(s[i] !== null) { total[i] += s[i]; counts[i]++; } } }
+              }
+          });
+          for(let i=0; i<5; i++) { peerScores[i] = counts[i] > 0 ? Math.round(total[i]/counts[i]) : null; }
+          peerLabel = '同類型自選股平均';
+      }
+
+      // 繪製右側分數清單
+      let slHtml = `<h4 style="margin-bottom:12px; border-bottom:1px solid var(--border); padding-bottom:8px;">五大構面健康度</h4>`;
+      dims.forEach((d, i) => {
+          let sVal = myScores[i] === null ? '資料不足' : `${myScores[i]} 分`;
+          let color = myScores[i] === null ? 'var(--text-light)' : (myScores[i] < 40 ? 'var(--red)' : (myScores[i] > 70 ? 'var(--green)' : 'var(--text)'));
+          slHtml += `<div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+              <span>${d}</span> <strong style="color:${color}">${sVal}</strong>
+          </div>`;
+      });
+      slHtml += `<p style="font-size:0.8rem; color:var(--text-light); margin-top:16px;">*分數僅為相對參考，並非投資評等</p>`;
+      scoreList.innerHTML = slHtml;
+
+      // 繪製 Chart.js 雷達圖
+      if(currentCharts['chart-radar']) currentCharts['chart-radar'].destroy();
+      const ctxRadar = document.getElementById('chart-radar').getContext('2d');
+      Chart.defaults.color = textColor;
+      currentCharts['chart-radar'] = new Chart(ctxRadar, {
+          type: 'radar',
+          data: {
+              labels: dims,
+              datasets: [
+                  { label: '本公司分數', data: myScores, backgroundColor: 'rgba(59, 130, 246, 0.4)', borderColor: '#3b82f6', pointBackgroundColor: '#3b82f6', borderWidth: 2 },
+                  { label: peerLabel, data: peerScores, backgroundColor: 'rgba(156, 163, 175, 0.1)', borderColor: '#9ca3af', borderDash: [5, 5], pointBackgroundColor: '#9ca3af', borderWidth: 1 }
+              ]
+          },
+          options: {
+              responsive: true, maintainAspectRatio: false, spanGaps: false,
+              scales: { r: { min: 0, max: 100, angleLines: { color: gridColor }, grid: { color: gridColor }, pointLabels: { color: textColor, font: { size: 13 } } } },
+              plugins: { legend: { position: 'bottom', labels: { color: textColor } } }
+          }
+      });
+  }
+
+  // 2. 處理下方傳統折線/長條圖
   const commonOptions = {
-    responsive: true, maintainAspectRatio: false,
+    responsive: true, maintainAspectRatio: false, spanGaps: false,
     scales: { x: { ticks: { color: textColor }, grid: { color: gridColor } }, y: { ticks: { color: textColor }, grid: { color: gridColor } } },
     plugins: { legend: { labels: { color: textColor } } }
   };

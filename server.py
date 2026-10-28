@@ -28,7 +28,6 @@ CACHE_TTL = 6 * 3600  # 6 小時 (秒)
 
 # ================= 輔助函式 =================
 def fetch_finmind_data(dataset, stock_id):
-    """向 FinMind 請求資料，並處理錯誤與額度問題"""
     url = "https://api.finmindtrade.com/api/v4/data"
     payload = {"dataset": dataset, "data_id": stock_id, "start_date": START_DATE, "token": FINMIND_TOKEN}
     try:
@@ -45,7 +44,6 @@ def fetch_finmind_data(dataset, stock_id):
         return None, f"網路連線異常: {str(e)}"
 
 def get_val(row_dict, keys, default=None):
-    """無敵欄位比對：轉小寫、去空白。找不到一律回傳 None"""
     if not row_dict:
         return default
         
@@ -67,7 +65,6 @@ def scale_val(val, factor=1000000):
     return val / factor if val is not None else None
 
 def safe_div(n, d, mult=1):
-    """安全除法：任一為 None 或分母為 0 時，回傳 None"""
     if n is not None and d is not None and d != 0:
         return (n / d) * mult
     return None
@@ -92,7 +89,6 @@ def get_single_q_cf(cf_by_q, q_str, keys):
     prev_q_str = f"{year}Q{q_num - 1}"
     prev_ytd = get_val(cf_by_q.get(prev_q_str, {}), keys)
     
-    # 若上一季資料缺失，無法解累計，當季設為 None
     if prev_ytd is None:
         return None
         
@@ -100,7 +96,6 @@ def get_single_q_cf(cf_by_q, q_str, keys):
 
 # ================= 核心分析函式 =================
 def process_financials(stock_id):
-    # 1. 抓取基本資訊以判斷產業
     info_data, err = fetch_finmind_data("TaiwanStockInfo", stock_id)
     name = f"代號 {stock_id}"
     industry = "未分類產業"
@@ -114,7 +109,6 @@ def process_financials(stock_id):
     if any(kw in industry for kw in fin_keywords):
         is_financial = True
 
-    # 2. 抓取三大報表
     income_raw, err1 = fetch_finmind_data("TaiwanStockFinancialStatements", stock_id)
     bs_raw, err2 = fetch_finmind_data("TaiwanStockBalanceSheet", stock_id)
     cf_raw, err3 = fetch_finmind_data("TaiwanStockCashFlowsStatement", stock_id)
@@ -122,7 +116,6 @@ def process_financials(stock_id):
     if err1: return None, err1, 502
     if not income_raw: return None, f"找不到代號 {stock_id} 的損益表資料", 404
 
-    # 3. 三大報表字典徹底分離，避免中文 Key 互相覆蓋
     income_by_q = {}
     bs_by_q = {}
     cf_by_q = {}
@@ -144,20 +137,26 @@ def process_financials(stock_id):
     
     quarters_data = []
     
-    # 4. 以「損益表」存在的季度為基準進行迭代
     for q_str in sorted(income_by_q.keys()):
         inc_row = income_by_q[q_str]
         bs_row = bs_by_q.get(q_str, {})
+        cf_row = cf_by_q.get(q_str, {})
         
-        # --- 損益表指標 ---
+        # 為了部分會跨表出現的項目，準備合併字典
+        merged_row = {**inc_row, **bs_row, **cf_row}
+        
+        # --- 損益表與混合指標 ---
         revenue = scale_val(get_val(inc_row, ["Revenue", "營業收入", "營業收入合計", "收益合計", "淨收益", "利息淨收益"]))
         cogs = scale_val(get_val(inc_row, ["CostOfGoodsSold", "營業成本", "營業成本合計"]))
         gross_profit = scale_val(get_val(inc_row, ["GrossProfit", "營業毛利", "營業毛利(毛損)"]))
+        
         operating_income = scale_val(get_val(inc_row, ["OperatingIncome", "營業利益", "營業利益(損失)", "稅前淨利", "繼續營業單位稅前損益", "PreTaxIncome"]))
+        non_operating_income = scale_val(get_val(inc_row, ["TotalNonoperatingIncomeAndExpense", "營業外收入及支出"]))
         net_income = scale_val(get_val(inc_row, ["IncomeAfterTaxes", "IncomeAfterTax", "NetIncome", "本期淨利", "本期淨利(淨損)", "本期稅後淨利", "本期稅後淨利(淨損)"]))
         eps = get_val(inc_row, ["EPS", "基本每股盈餘", "基本每股盈餘(元)"])
         
-        # 嚴謹的毛利反推 (只有在本身為空，且有營收與成本時才做)
+        interest_expense = scale_val(get_val(merged_row, ["InterestExpense", "利息費用", "FinanceCosts", "財務成本", "PayTheInterest", "支付之利息"]))
+        
         if gross_profit is None and revenue is not None and cogs is not None:
             gross_profit = revenue - cogs
 
@@ -174,18 +173,22 @@ def process_financials(stock_id):
         ar = scale_val(get_val(bs_row, ["AccountsReceivableNet", "AccountsReceivable", "應收帳款淨額", "應收帳款", "應收款項淨額"]))
         inv = scale_val(get_val(bs_row, ["Inventories", "Inventory", "存貨", "存貨淨額"]))
         
+        cash_end = scale_val(get_val(merged_row, ["CashBalancesEndOfPeriod", "期末現金及約當現金餘額", "期末現金及約當現金", "CashAndCashEquivalents", "現金及約當現金"]))
+
         # --- 現金流量表指標 (單季處理) ---
         op_cf_keys = ["NetCashFlowsFromOperatingActivities", "NetCashInflowFromOperatingActivities", "CashFlowsFromOperatingActivities", "營業活動之淨現金流入", "營業活動之淨現金流入(流出)", "營業活動之現金流量－淨額"]
         capex_keys = ["PropertyAndPlantAndEquipment", "取得不動產、廠房及設備", "取得不動產、廠房及設備(增加)減少"]
+        fin_cf_keys = ["CashFlowsProvidedFromFinancingActivities", "籌資活動之淨現金流入（流出）", "籌資活動之淨現金流入", "融資活動之淨現金流入(流出)", "融資活動之淨現金流入"]
         
         operating_cf = scale_val(get_single_q_cf(cf_by_q, q_str, op_cf_keys))
         capex = scale_val(get_single_q_cf(cf_by_q, q_str, capex_keys))
+        financing_cf = scale_val(get_single_q_cf(cf_by_q, q_str, fin_cf_keys))
         
         free_cf = None
         if operating_cf is not None and capex is not None:
             free_cf = operating_cf - abs(capex)
         
-        # --- 衍生指標計算 (包含 YoY, 負債比, 流動比, 天數) ---
+        # --- 衍生指標計算 ---
         current_year, quarter_num = int(q_str[:4]), q_str[4:]
         last_year_q_str = f"{current_year - 1}{quarter_num}"
         last_year_rev = scale_val(get_val(income_by_q.get(last_year_q_str, {}), ["Revenue", "營業收入", "營業收入合計", "收益合計", "淨收益", "利息淨收益"]))
@@ -199,6 +202,12 @@ def process_financials(stock_id):
         arDays = safe_div((ar * 90) if ar is not None else None, revenue)
         invDays = safe_div((inv * 90) if inv is not None else None, cogs)
         
+        interestCoverage = safe_div(operating_income, abs(interest_expense) if interest_expense is not None else None)
+        
+        quickRatio = None
+        if current_assets is not None and current_liabilities is not None and current_liabilities != 0:
+            quickRatio = (current_assets - (inv if inv is not None else 0)) / current_liabilities
+        
         # --- 金融股強制覆蓋 ---
         if is_financial:
             grossMargin = None
@@ -206,24 +215,31 @@ def process_financials(stock_id):
             arDays = None
             invDays = None
             free_cf = None
+            quickRatio = None
+            interestCoverage = None
             
         quarters_data.append({
             "q": q_str,
             "revenue": safe_round(revenue, 0),
             "revenueYoY": safe_round(revenue_yoy, 2),
             "grossMargin": safe_round(grossMargin, 2),
+            "operatingIncome": safe_round(operating_income, 0),
             "operatingMargin": safe_round(operatingMargin, 2),
+            "nonOperatingIncome": safe_round(non_operating_income, 0),
             "netIncome": safe_round(net_income, 0),
             "eps": safe_round(eps, 2),
+            "interestCoverage": safe_round(interestCoverage, 2),
             "debtRatio": safe_round(debtRatio, 2),
             "currentRatio": safe_round(currentRatio, 2),
+            "quickRatio": safe_round(quickRatio, 2),
             "arDays": safe_round(arDays, 0), 
             "invDays": safe_round(invDays, 0), 
             "operatingCF": safe_round(operating_cf, 0), 
-            "freeCF": safe_round(free_cf, 0)
+            "financingCF": safe_round(financing_cf, 0),
+            "freeCF": safe_round(free_cf, 0),
+            "cashEnd": safe_round(cash_end, 0)
         })
 
-    # 取最近 8 季
     final_quarters = quarters_data[-8:]
     latest_quarter = final_quarters[-1]["q"] if final_quarters else None
 
@@ -237,14 +253,13 @@ def process_financials(stock_id):
     }
     return result, None, 200
 
-# ================= 網頁呼叫路由 (加入快取機制) =================
+# ================= 網頁呼叫路由 =================
 @app.route('/api/stock/<stock_id>', methods=['GET'])
 def api_get_stock(stock_id):
     force_refresh = request.args.get('refresh', '0') == '1'
     cache_file = os.path.join(CACHE_DIR, f"{stock_id}.json")
     now = time.time()
     
-    # 讀取快取邏輯
     if not force_refresh:
         if stock_id in memory_cache and (now - memory_cache[stock_id]['time'] < CACHE_TTL):
             return jsonify(memory_cache[stock_id]['data'])
@@ -262,7 +277,6 @@ def api_get_stock(stock_id):
     if err_msg:
         return jsonify({"error": err_msg}), status_code
         
-    # 寫入快取
     memory_cache[stock_id] = {'time': now, 'data': result}
     with open(cache_file, 'w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False)

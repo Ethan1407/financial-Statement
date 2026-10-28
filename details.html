@@ -46,7 +46,6 @@
           </div>
         </div>
         
-        <!-- 【新增】公司類型手動調整區塊 -->
         <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
           <label for="company-type-select" style="color: var(--text-light); font-size: 0.9rem;">檢驗標準覆蓋：</label>
           <select id="company-type-select" style="padding: 4px 8px; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text);" onchange="overrideCompanyType(window.currentStockId, this.value)">
@@ -55,11 +54,28 @@
             <option value="cyclical">傳產/景氣循環</option>
             <option value="growth">成長股</option>
             <option value="dividend">高股息/存股型</option>
+            <option value="financial">金融業</option>
           </select>
           <p id="company-type-desc" style="font-size: 0.85rem; color: var(--text-light); margin-top: 8px;">--</p>
         </div>
+        
+        <!-- 【新增】白話文摘要區塊 -->
+        <div id="detail-plain-summary" style="margin-top: 16px;"></div>
 
-        <div id="detail-alerts-summary" style="margin-top: 12px; font-size: 0.9rem; padding-top:12px; border-top: 1px dashed var(--border);"></div>
+        <!-- 警訊列表 -->
+        <div id="detail-alerts-summary" style="margin-top: 12px; font-size: 0.9rem;"></div>
+      </div>
+
+      <!-- 【新增】健康度雷達圖卡片 -->
+      <div class="card" id="radar-card" style="margin-bottom: 16px;">
+        <h3 style="margin-bottom: 16px;">健康度雷達圖</h3>
+        <div id="radar-container" class="flex-between" style="align-items: center; gap: 24px;">
+            <div style="flex:2; max-width:500px; position:relative; min-height:300px;">
+                <canvas id="chart-radar"></canvas>
+            </div>
+            <div id="radar-score-list" style="flex:1;"></div>
+        </div>
+        <div id="radar-financial-msg" class="empty-state" style="display:none; margin: 24px 0;"></div>
       </div>
 
       <div class="card">
