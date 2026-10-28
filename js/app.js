@@ -40,28 +40,58 @@ async function addStock() {
   if (!id) return;
 
   let stockDatabase = JSON.parse(localStorage.getItem('stock_database') || '{}');
-  if (portfolio.includes(id) && stockDatabase[id]) {
-      alert('此股票已在自選清單中！'); input.value = ''; return;
-  }
+  let isUpdating = portfolio.includes(id);
+
+  // 記錄舊資料的最新季，用來比對更新結果
+  const oldQuarter = (isUpdating && stockDatabase[id]) ? stockDatabase[id].latestQuarter : null;
 
   const originalText = btn.innerText;
-  btn.innerText = '爬取中...'; btn.disabled = true;
+  // 依照狀態顯示不同按鈕文字
+  btn.innerText = isUpdating ? '檢查更新中...' : '爬取中...'; 
+  btn.disabled = true;
 
   try {
-    const response = await fetch(`${API_BASE}/api/stock/${id}`);
+    // 已經在清單中的股票，加上 ?refresh=1 強制更新
+    const endpoint = isUpdating ? `${API_BASE}/api/stock/${id}?refresh=1` : `${API_BASE}/api/stock/${id}`;
+    const response = await fetch(endpoint);
     const result = await response.json();
-    if (!response.ok) { alert(result.error || '爬取失敗，請確認代號正確'); return; }
+    
+    if (!response.ok) { 
+        alert(result.error || '爬取失敗，請確認代號正確'); 
+        return; 
+    }
 
     stockDatabase[id] = result;
     localStorage.setItem('stock_database', JSON.stringify(stockDatabase));
 
-    if (!portfolio.includes(id)) { portfolio.push(id); savePortfolio(); }
+    const newQuarter = result.latestQuarter;
+
+    if (!isUpdating) { 
+        portfolio.push(id); 
+        savePortfolio(); 
+    } else {
+        // 智慧比對新舊資料並顯示對應提示
+        if (oldQuarter && newQuarter === oldQuarter) {
+            alert(`✅ ${id} 目前的財報已是最新版 (${newQuarter})，尚無新財報公布。`);
+        } else if (oldQuarter && newQuarter > oldQuarter) {
+            alert(`🎉 ${id} 更新成功！已為您抓取最新一季財報 (${newQuarter})。`);
+        } else {
+            alert(`✅ ${id} 資料同步完成！`);
+        }
+    }
+    
     renderPortfolio();
     if (typeof updateDetailSelect === 'function') updateDetailSelect();
+
+    // 背景觸發月營收更新 (不阻擋主流程)
+    fetch(`${API_BASE}/api/monthly/${id}?refresh=1`).catch(e => console.log('月營收更新略過'));
+
   } catch (err) {
     alert('無法連線到 Python 伺服器！請確認您已開啟 Python 後端，或伺服器正在重新啟動中。');
   } finally {
-    btn.innerText = originalText; btn.disabled = false; input.value = '';
+    btn.innerText = originalText; 
+    btn.disabled = false; 
+    input.value = '';
   }
 }
 
