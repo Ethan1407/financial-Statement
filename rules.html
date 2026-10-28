@@ -1,265 +1,114 @@
-// ==========================================
-// 1. 產業自動對照表 (INDUSTRY_TO_TYPE)
-// ==========================================
-const INDUSTRY_TO_TYPE = {
-    "半導體業": "electronics", "電子零組件業": "electronics", "電腦及週邊設備業": "electronics", "光電業": "electronics", "通信網路業": "electronics", "其他電子業": "electronics", "電子通路業": "electronics", "資訊服務業": "electronics",
-    "鋼鐵工業": "cyclical", "塑膠工業": "cyclical", "水泥工業": "cyclical", "航運業": "cyclical", "化學工業": "cyclical", "造紙工業": "cyclical", "紡織纖維": "cyclical", "橡膠工業": "cyclical", "玻璃陶瓷": "cyclical", "油電燃氣業": "cyclical",
-    "生技醫療業": "growth",
-    "金融保險業": "financial"
-};
+<!DOCTYPE html>
+<html lang="zh-TW" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <title>規則與說明 - 財報健檢</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script defer src="/_vercel/insights/script.js"></script>
+</head>
+<body>
+  <header>
+    <div class="nav-container">
+      <div class="logo">📈 財報健檢儀表板</div>
+      <nav class="nav-links">
+        <a href="index.html">我的自選股</a>
+        <a href="alerts.html">警訊總覽</a>
+        <a href="details.html">個股詳情</a>
+        <a href="rules.html" class="active">規則與說明</a>
+      </nav>
+      <button class="theme-toggle" onclick="toggleTheme()">🌓</button>
+    </div>
+  </header>
+  <main>
+    <div class="card" style="margin-bottom: 24px;">
+      <h2>系統基礎運作說明</h2>
+      <p style="margin-top: 8px; color: var(--text-light); line-height: 1.6;">
+        本系統資料來源為 FinMind API。判斷門檻會根據「公司產業類型」進行動態適配，以減少因為產業特性帶來的誤判。<br>
+        最後更新時間：<span id="info-date" style="color:var(--primary); font-weight:bold;"></span> (最新財報季：<span id="info-q" style="font-weight:bold;">--</span>)
+      </p>
+    </div>
 
-// ==========================================
-// 2. 雷達圖評分區間設定 (SCORE_CONFIG)
-// ==========================================
-// 陣列為 [0分門檻, 100分門檻]，程式會自動在兩者間線性轉換 (超過範圍以 0 或 100 計)
-const SCORE_CONFIG = {
-    baseline: 60, // 參考基準線預設值
-    profit: { gross: [0, 40], op: [0, 20] },           // 獲利力: 毛利率 0%~40%，營益率 0%~20%
-    growth: { yoy: [0, 30] },                          // 成長力: 營收 YoY 0%~30%
-    solvency: { debt: [80, 30], current: [0.8, 2.0] }, // 償債力: 負債比 80%(危險)~30%(安全)，流動比 0.8~2.0
-    cf: { op: [0, 20], free: [0, 10] },                // 現金流: 現金流佔營收比例，營業CF 0%~20%，自由CF 0%~10%
-    efficiency: { ar: [150, 30], inv: [150, 30] }      // 營運效率: 天數 150天(差)~30天(優)
-};
+    <!-- 產業分類覆蓋規則表 -->
+    <div class="card" style="margin-bottom: 24px;">
+      <h3>🏢 產業類型檢驗差異</h3>
+      <p style="margin: 8px 0 16px 0; color: var(--text-light); font-size: 0.9rem;">不同類型的公司套用以下不同標準。您可以在「個股詳情」中手動為公司更改類型。</p>
+      <div class="table-responsive">
+        <table>
+          <thead>
+            <tr><th style="width: 25%">公司類型</th><th>調整與覆蓋說明</th></tr>
+          </thead>
+          <tbody id="type-table-body">
+            <!-- JS 動態生成 -->
+          </tbody>
+        </table>
+      </div>
+    </div>
 
-function calcHealthScores(quarterData) {
-    if (!quarterData || quarterData.length === 0) return [null, null, null, null, null];
-    const latest = quarterData[quarterData.length - 1];
+    <!-- 基礎警訊門檻表 -->
+    <div class="card">
+      <h3>⚠️ 基礎警訊判斷標準 (一般類型)</h3>
+      <div class="table-responsive" style="margin-top: 16px;">
+        <table>
+          <thead>
+            <tr><th style="width: 15%">嚴重程度</th><th style="width: 25%">警訊名稱</th><th>具體判斷條件與門檻</th></tr>
+          </thead>
+          <tbody id="rules-table-body">
+            <!-- JS 動態生成 -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
 
-    const mapScore = (val, minV, maxV) => {
-        if (val === null || val === undefined) return null;
-        let p = (val - minV) / (maxV - minV);
-        if (p < 0) p = 0;
-        if (p > 1) p = 1;
-        return p * 100;
-    };
+  <script src="js/rules.js"></script>
+  <script src="js/app.js"></script>
+  <script>
+    function initRules() {
+      const stockDatabase = JSON.parse(localStorage.getItem('stock_database') || '{}');
+      let latestTime = null;
+      let latestQ = null;
+      
+      portfolio.forEach(id => {
+          const data = stockDatabase[id];
+          if(data && data.fetchedAt) {
+              if(!latestTime || new Date(data.fetchedAt) > new Date(latestTime)) latestTime = data.fetchedAt;
+          }
+          if(data && data.latestQuarter) {
+              if(!latestQ || data.latestQuarter > latestQ) latestQ = data.latestQuarter;
+          }
+      });
 
-    const avg = (arr) => {
-        let valid = arr.filter(v => v !== null);
-        if (valid.length === 0) return null;
-        return Math.round(valid.reduce((a, b) => a + b, 0) / valid.length);
-    };
+      if (latestTime) {
+          const d = new Date(latestTime);
+          document.getElementById('info-date').innerText = d.toLocaleString('zh-TW');
+          document.getElementById('info-q').innerText = latestQ || "未知";
+      } else {
+          document.getElementById('info-date').innerText = "尚未取得資料";
+      }
 
-    let p_gross = mapScore(latest.grossMargin, SCORE_CONFIG.profit.gross[0], SCORE_CONFIG.profit.gross[1]);
-    let p_op = mapScore(latest.operatingMargin, SCORE_CONFIG.profit.op[0], SCORE_CONFIG.profit.op[1]);
-    let profitScore = avg([p_gross, p_op]);
+      const typeBody = document.getElementById('type-table-body');
+      typeBody.innerHTML = '';
+      for (const key in TYPE_PROFILES) {
+          const t = TYPE_PROFILES[key];
+          typeBody.innerHTML += `<tr><td><strong>${t.label}</strong></td><td>${t.desc}</td></tr>`;
+      }
 
-    let growthScore = mapScore(latest.revenueYoY, SCORE_CONFIG.growth.yoy[0], SCORE_CONFIG.growth.yoy[1]);
-    if (growthScore !== null) growthScore = Math.round(growthScore);
-
-    let s_debt = mapScore(latest.debtRatio, SCORE_CONFIG.solvency.debt[0], SCORE_CONFIG.solvency.debt[1]);
-    let s_current = mapScore(latest.currentRatio, SCORE_CONFIG.solvency.current[0], SCORE_CONFIG.solvency.current[1]);
-    let solvencyScore = avg([s_debt, s_current]);
-
-    let cf_op = (latest.revenue > 0 && latest.operatingCF !== null) ? mapScore(latest.operatingCF / latest.revenue * 100, SCORE_CONFIG.cf.op[0], SCORE_CONFIG.cf.op[1]) : null;
-    let cf_free = (latest.revenue > 0 && latest.freeCF !== null) ? mapScore(latest.freeCF / latest.revenue * 100, SCORE_CONFIG.cf.free[0], SCORE_CONFIG.cf.free[1]) : null;
-    let cfScore = avg([cf_op, cf_free]);
-
-    let e_ar = mapScore(latest.arDays, SCORE_CONFIG.efficiency.ar[0], SCORE_CONFIG.efficiency.ar[1]);
-    let e_inv = mapScore(latest.invDays, SCORE_CONFIG.efficiency.inv[0], SCORE_CONFIG.efficiency.inv[1]);
-    let effScore = avg([e_ar, e_inv]);
-
-    return [profitScore, growthScore, solvencyScore, cfScore, effScore];
-}
-
-// ==========================================
-// 3. 集中管理的規則設定物件 (RULES_CONFIG)
-// ==========================================
-const RULES_CONFIG = {
-    revenueDecline: { 
-        name: "營收連續衰退", level: "red", consecutive: 3, why: (c) => `營收年增率連續 ${c.consecutive} 季為負`,
-        check: (data, config) => {
-            if (data.length < config.consecutive) return { status: 'skipped' };
-            const recent = data.slice(-config.consecutive);
-            if (recent.some(q => q.revenueYoY === null)) return { status: 'skipped' };
-            if (recent.every(q => q.revenueYoY < 0)) return { status: 'alert', text: `營收年增率連續 ${config.consecutive} 季為負`, qs: recent.map(q=>q.q), tab: 'income' };
-            return { status: 'pass' };
-        }
-    },
-    lowCurrentRatio: { 
-        name: "流動比率過低", level: "red", threshold: 1.0, why: (c) => `流動比率低於 ${c.threshold}`,
-        check: (data, config) => {
-            const latest = data[data.length - 1];
-            if (latest.currentRatio === null) return { status: 'skipped' };
-            if (latest.currentRatio < config.threshold) return { status: 'alert', text: `最新流動比率 ${latest.currentRatio} 低於 ${config.threshold}`, qs: [latest.q], tab: 'balance' };
-            return { status: 'pass' };
-        }
-    },
-    grossMarginDrop: { 
-        name: "毛利率連續下滑", level: "yellow", consecutive: 2, why: (c) => `毛利率連續 ${c.consecutive} 季下滑`,
-        check: (data, config) => {
-            if (data.length < config.consecutive + 1) return { status: 'skipped' };
-            const recent = data.slice(-(config.consecutive + 1));
-            if (recent.some(q => q.grossMargin === null)) return { status: 'skipped' };
-            let declining = true;
-            for(let i=1; i<recent.length; i++) {
-                if (recent[i].grossMargin >= recent[i-1].grossMargin) declining = false;
-            }
-            if (declining) return { status: 'alert', text: `毛利率連續 ${config.consecutive} 季下滑`, qs: recent.slice(1).map(q=>q.q), tab: 'income' };
-            return { status: 'pass' };
-        }
-    },
-    negativeFreeCF: { 
-        name: "自由現金流連續為負", level: "red", consecutive: 2, why: (c) => `自由現金流連續 ${c.consecutive} 季小於 0`,
-        check: (data, config) => {
-            if (data.length < config.consecutive) return { status: 'skipped' };
-            const recent = data.slice(-config.consecutive);
-            if (recent.some(q => q.freeCF === null)) return { status: 'skipped' };
-            if (recent.every(q => q.freeCF < 0)) return { status: 'alert', text: `自由現金流連續 ${config.consecutive} 季小於 0`, qs: recent.map(q=>q.q), tab: 'cashflow' };
-            return { status: 'pass' };
-        }
-    },
-    profitButNoCash: { 
-        name: "淨利為正但無現金流入", level: "yellow", why: (c) => `單季淨利大於 0，但營業現金流為負`,
-        check: (data, config) => {
-            const latest = data[data.length - 1];
-            if (latest.netIncome === null || latest.operatingCF === null) return { status: 'skipped' };
-            if (latest.netIncome > 0 && latest.operatingCF < 0) return { status: 'alert', text: `最新季淨利為正，但營業現金流為負`, qs: [latest.q], tab: 'cashflow' };
-            return { status: 'pass' };
-        }
-    },
-    highDebtRatio: { 
-        name: "負債比過高", level: "yellow", threshold: 70, why: (c) => `負債比大於 ${c.threshold}%`,
-        check: (data, config) => {
-            const latest = data[data.length - 1];
-            if (latest.debtRatio === null) return { status: 'skipped' };
-            if (latest.debtRatio > config.threshold) return { status: 'alert', text: `最新負債比 ${latest.debtRatio}% 高於 ${config.threshold}%`, qs: [latest.q], tab: 'balance' };
-            return { status: 'pass' };
-        }
-    }
-};
-
-// ==========================================
-// 4. 產業類型與規則覆蓋設定 (TYPE_PROFILES)
-// ==========================================
-const TYPE_PROFILES = {
-    electronics: {
-        label: "電子製造/半導體", desc: "資本密集，允許自由現金流短期為負(重資本支出屬正常)。",
-        overrides: { negativeFreeCF: { disabled: true } }
-    },
-    cyclical: {
-        label: "傳產/景氣循環", desc: "景氣波動大，放寬營收衰退(連續 4 季)與負債比門檻(80%)。",
-        overrides: { revenueDecline: { consecutive: 4 }, highDebtRatio: { threshold: 80 } }
-    },
-    growth: {
-        label: "成長股", desc: "重視營收成長，允許短期虧損與現金流為負(關閉淨利為正但無現金流示警)。",
-        overrides: { profitButNoCash: { disabled: true } }
-    },
-    dividend: {
-        label: "高股息/存股型", desc: "要求穩定獲利與現金流，對毛利(連續 2 季下滑)與現金流(單季為負)更嚴格。",
-        overrides: { grossMarginDrop: { consecutive: 2, level: "yellow" }, profitButNoCash: { level: "red" } }
-    },
-    financial: {
-        label: "金融業", desc: "金融業報表結構不同，流動比率、毛利、存貨等指標不適用，目前僅檢查營收趨勢與獲利趨勢。",
-        overrides: { lowCurrentRatio: { disabled: true }, grossMarginDrop: { disabled: true }, negativeFreeCF: { disabled: true }, profitButNoCash: { disabled: true }, highDebtRatio: { disabled: true } }
-    },
-    general: {
-        label: "一般 (預設)", desc: "不作任何產業調整，使用標準檢驗門檻。",
-        overrides: {}
-    }
-};
-
-// ==========================================
-// 5. 白話文摘要產生器 (generateSummary)
-// ==========================================
-function generateSummary(alerts, skipped, status, quarters) {
-    if (!quarters || quarters.length === 0) return { detail: '資料異常。', short: '無資料' };
-    const latest = quarters[quarters.length - 1];
-
-    let statusText = status === 'red' ? '整體狀況需注意，存在警戒訊號。' : (status === 'yellow' ? '整體狀況尚可，但有需留意事項。' : '整體財報表現健康，無重大異常。');
-
-    let pros = [];
-    let yoyCount = 0;
-    for(let i = quarters.length - 1; i >= 0; i--) {
-        if (quarters[i].revenueYoY > 0) yoyCount++;
-        else break;
-    }
-    if (yoyCount >= 2) pros.push(`營收連續 ${yoyCount} 季成長`);
-    else if (latest.revenueYoY > 0) pros.push(`最新營收年增 ${latest.revenueYoY}%`);
-
-    if (latest.operatingCF > 0 && latest.freeCF > 0) pros.push('營業與自由現金流皆為正');
-    else if (latest.operatingCF > 0) pros.push('維持正向營業現金流');
-
-    if (latest.grossMargin !== null && latest.grossMargin > 20) pros.push(`毛利率達 ${latest.grossMargin}%`);
-    if (latest.debtRatio !== null && latest.debtRatio < 50) pros.push(`負債比 ${latest.debtRatio}% 體質穩健`);
-
-    let prosSelected = pros.slice(0, 2);
-    let prosText = prosSelected.length > 0 ? `優點包含：${prosSelected.join('，且')}。` : '';
-
-    let concernsText = '';
-    if (alerts.length > 0) {
-        let alertDetails = alerts.map(a => {
-            let n = a.rule.name;
-            let val = '';
-            if (n.includes('營收') && latest.revenueYoY !== null) val = `(最新 ${latest.revenueYoY}%)`;
-            else if (n.includes('毛利') && latest.grossMargin !== null) val = `(最新 ${latest.grossMargin}%)`;
-            else if (n.includes('流動比') && latest.currentRatio !== null) val = `(最新 ${latest.currentRatio})`;
-            else if (n.includes('負債') && latest.debtRatio !== null) val = `(最新 ${latest.debtRatio}%)`;
-            else if (n.includes('現金流') && latest.operatingCF !== null) val = `(最新營現 ${latest.operatingCF})`;
-            return `${n}${val}`;
-        });
-        concernsText = `疑慮方面：觸發了「${alertDetails.join('、')}」。`;
-    }
-
-    let missingText = skipped && skipped.length > 0 ? '部分指標資料不足，未納入判斷。' : '';
-    let ending = '以上為依財報數據自動產生的整理，不構成投資建議。';
-    
-    let detail = `${statusText} ${prosText} ${concernsText} ${missingText} ${ending}`.trim();
-    
-    let shortPros = prosSelected.length > 0 ? prosSelected[0] : '無特別亮點';
-    let shortAlerts = alerts.length > 0 ? `${alerts.length}項警訊` : '無警訊';
-    let short = `${status==='green'?'健康':(status==='red'?'警戒':'注意')}｜${shortPros}｜${shortAlerts}`;
-
-    return { detail, short };
-}
-
-// ==========================================
-// 6. 輔助函式與分析核心
-// ==========================================
-function getDefaultCompanyType(industry, isFinancial) {
-    if (isFinancial) return 'financial';
-    if (!industry) return 'general';
-    return INDUSTRY_TO_TYPE[industry] || 'general';
-}
-
-function getEffectiveRules(type) {
-    const profile = TYPE_PROFILES[type] || TYPE_PROFILES['general'];
-    const effective = {};
-    for (const [key, baseConfig] of Object.entries(RULES_CONFIG)) {
-        const override = profile.overrides[key] || {};
-        if (override.disabled) continue;
-        effective[key] = { ...baseConfig, ...override };
-    }
-    return effective;
-}
-
-function analyzeStock(stockId) {
-    const stockDatabase = JSON.parse(localStorage.getItem('stock_database') || '{}');
-    const data = stockDatabase[stockId];
-    if (!data || !data.quarters || data.quarters.length === 0) return null;
-    
-    const overrides = JSON.parse(localStorage.getItem('typeOverrides') || '{}');
-    const defaultType = getDefaultCompanyType(data.industry, data.isFinancial);
-    const effectiveType = overrides[stockId] || defaultType;
-    
-    const rules = getEffectiveRules(effectiveType);
-    
-    let alerts = [];
-    let skipped = [];
-    let status = 'green';
-    
-    for (const key of Object.keys(rules)) {
-        const ruleConf = rules[key];
-        const res = ruleConf.check(data.quarters, ruleConf);
-        if (res && res.status === 'alert') {
-            alerts.push({ rule: ruleConf, detail: res });
-            if (ruleConf.level === 'red') status = 'red';
-            else if (status === 'green' && ruleConf.level === 'yellow') status = 'yellow';
-        } else if (res && res.status === 'skipped') {
-            skipped.push(ruleConf);
-        }
+      const rulesBody = document.getElementById('rules-table-body');
+      rulesBody.innerHTML = '';
+      for (const key in RULES_CONFIG) {
+          const r = RULES_CONFIG[key];
+          // 容錯判斷：如果被設定為 dynamic 動態規則，則顯示黃燈當作基礎顏色
+          const badgeClass = r.level === 'red' ? 'red' : 'yellow';
+          const badgeText = r.level === 'red' ? '紅燈 (警戒)' : '黃燈 (注意)';
+          const desc = typeof r.why === 'function' ? r.why(r) : r.why;
+          rulesBody.innerHTML += `<tr><td><span class="badge ${badgeClass}">${badgeText}</span></td><td><strong>${r.name}</strong></td><td>${desc}</td></tr>`;
+      }
     }
     
-    const summary = generateSummary(alerts, skipped, status, data.quarters);
-    
-    return { alerts, skipped, status, data, effectiveType, summary };
-}
+    // 保護：確保程式載入完畢才執行表格繪製
+    document.addEventListener('DOMContentLoaded', () => {
+       initRules();
+    });
+  </script>
+</body>
+</html>

@@ -59,20 +59,24 @@
           <p id="company-type-desc" style="font-size: 0.85rem; color: var(--text-light); margin-top: 8px;">--</p>
         </div>
         
-        <!-- 【新增】白話文摘要區塊 -->
         <div id="detail-plain-summary" style="margin-top: 16px;"></div>
+        <div id="detail-qoq"></div>
 
-        <!-- 警訊列表 -->
+        <div style="margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--border);">
+            <h4 style="margin-bottom: 8px; display:flex; justify-content:space-between; align-items:center;">
+                近 8 季風險分數趨勢
+                <span style="font-size: 0.8rem; color: var(--text-light); font-weight: normal;">*分數僅納入有資料的規則</span>
+            </h4>
+            <div class="chart-container" style="height: 180px;"><canvas id="chart-risk"></canvas></div>
+        </div>
+
         <div id="detail-alerts-summary" style="margin-top: 12px; font-size: 0.9rem;"></div>
       </div>
 
-      <!-- 【新增】健康度雷達圖卡片 -->
       <div class="card" id="radar-card" style="margin-bottom: 16px;">
         <h3 style="margin-bottom: 16px;">健康度雷達圖</h3>
         <div id="radar-container" class="flex-between" style="align-items: center; gap: 24px;">
-            <div style="flex:2; max-width:500px; position:relative; min-height:300px;">
-                <canvas id="chart-radar"></canvas>
-            </div>
+            <div style="flex:2; max-width:500px; position:relative; min-height:300px;"><canvas id="chart-radar"></canvas></div>
             <div id="radar-score-list" style="flex:1;"></div>
         </div>
         <div id="radar-financial-msg" class="empty-state" style="display:none; margin: 24px 0;"></div>
@@ -90,18 +94,19 @@
           <h4 style="margin-top: 24px;">損益表數據明細</h4>
           <div class="table-responsive">
             <table id="table-income">
-              <thead><tr><th>季度</th><th>營收(百萬)</th><th>年增率</th><th>毛利率</th><th>營益率</th><th>淨利(百萬)</th><th>EPS</th></tr></thead>
+              <thead><tr><th>季度</th><th>營收(百萬)</th><th>年增率</th><th>毛利率</th><th>營業利益(百萬)</th><th>營益率</th><th>營業外收支(百萬)</th><th>淨利(百萬)</th><th>EPS</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
         </div>
 
         <div id="tab-balance" class="tab-content">
-          <div class="chart-container"><canvas id="chart-balance"></canvas></div>
+          <div class="chart-container" style="margin-bottom:16px;"><canvas id="chart-balance"></canvas></div>
+          <div class="chart-container" style="border-top:1px dashed var(--border); padding-top:16px;"><canvas id="chart-balance-2"></canvas></div>
           <h4 style="margin-top: 24px;">財務狀況表數據明細</h4>
           <div class="table-responsive">
             <table id="table-balance">
-              <thead><tr><th>季度</th><th>負債比</th><th>流動比</th><th>應收天數</th><th>存貨天數</th></tr></thead>
+              <thead><tr><th>季度</th><th>負債比</th><th>流動比</th><th>速動比率</th><th>利息保障倍數</th><th>應收天數</th><th>存貨天數</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
@@ -112,7 +117,7 @@
           <h4 style="margin-top: 24px;">現金流量表數據明細</h4>
           <div class="table-responsive">
             <table id="table-cashflow">
-              <thead><tr><th>季度</th><th>營業現金流(百萬)</th><th>自由現金流(百萬)</th></tr></thead>
+              <thead><tr><th>季度</th><th>營業現金流(百萬)</th><th>融資現金流(百萬)</th><th>自由現金流(百萬)</th><th>期末現金(百萬)</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
