@@ -97,7 +97,6 @@
       rulesBody.innerHTML = '';
       for (const key in RULES_CONFIG) {
           const r = RULES_CONFIG[key];
-          // 容錯判斷：如果被設定為 dynamic 動態規則，則顯示黃燈當作基礎顏色
           const badgeClass = r.level === 'red' ? 'red' : 'yellow';
           const badgeText = r.level === 'red' ? '紅燈 (警戒)' : '黃燈 (注意)';
           const desc = typeof r.why === 'function' ? r.why(r) : r.why;
@@ -105,7 +104,6 @@
       }
     }
     
-    // 保護：確保程式載入完畢才執行表格繪製
     document.addEventListener('DOMContentLoaded', () => {
        initRules();
     });

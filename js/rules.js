@@ -24,7 +24,7 @@ function calcHealthScores(quarterData) {
     if (!quarterData || quarterData.length === 0) return [null, null, null, null, null];
     const latest = quarterData[quarterData.length - 1];
 
-    // 加入 isNaN 防呆保護
+    // 加入 isNaN 防呆，且使用 == null 相容 undefined
     const mapScore = (val, minV, maxV) => {
         if (val == null || isNaN(val)) return null;
         let p = (val - minV) / (maxV - minV);
@@ -299,11 +299,12 @@ function getEffectiveRules(type) {
     return effective;
 }
 
+// 動態計算歷史 8 季每一季當下的風險分數 (不可用未來資料)
 function calcHistoricalRiskScores(quarters, effectiveType) {
     let scores = [];
     const rules = getEffectiveRules(effectiveType);
     for(let i = 0; i < quarters.length; i++) {
-        let slice = quarters.slice(0, i + 1);
+        let slice = quarters.slice(0, i + 1); // 切出「該季以前」的資料
         let score = 0;
         for (const key of Object.keys(rules)) {
             const ruleConf = rules[key];

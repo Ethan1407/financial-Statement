@@ -1,3 +1,4 @@
+// 智慧判斷本機環境，加入 file: 協定保護，解決雙擊 HTML 無法連線的問題
 const API_BASE = (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost' || window.location.protocol === 'file:')
     ? 'http://127.0.0.1:5000'
     : 'https://ethan-stock-api.onrender.com';
@@ -100,6 +101,7 @@ function renderPortfolio() {
     const typeLabel = TYPE_PROFILES[item.effectiveType] ? TYPE_PROFILES[item.effectiveType].label : '一般';
     const isFin = item.effectiveType === 'financial';
     
+    // 使用 == null 相容舊資料
     const fmt = (val, inapp, suf) => {
         if(isFin && inapp) return '不適用';
         if(val == null) return '—';
@@ -287,6 +289,9 @@ function switchDetailTab(tabId) {
   if(targetTab) targetTab.classList.add('active');
 }
 
+// ==========================================
+// QoQ 本季 vs 上季 比較模組
+// ==========================================
 function generateQoQ(quarters, isFin) {
     if (quarters.length < 2) return '<p style="color:var(--text-light); font-size:0.9rem;">資料不足以比較</p>';
     const cur = quarters[quarters.length-1];
@@ -311,6 +316,7 @@ function generateQoQ(quarters, isFin) {
     let results = [];
     metrics.forEach(m => {
         if (isFin && ['grossMargin', 'currentRatio', 'quickRatio', 'arDays', 'invDays', 'interestCoverage', 'freeCF'].includes(m.key)) return;
+        // 防呆，若有一季缺資料則跳過
         if (cur[m.key] == null || prev[m.key] == null) return;
         
         let diff = 0;
@@ -429,7 +435,7 @@ function loadDetailView(stockId) {
     if (tbodyCashflow) tbodyCashflow.innerHTML += `<tr><td>${q.q}</td><td>${fmt(q.operatingCF)}</td><td>${fmt(q.financingCF)}</td><td>${fmt(q.freeCF, true)}</td><td>${fmt(q.cashEnd)}</td></tr>`;
   });
 
-  // 等待 DOM 確實重繪後再繪製圖表
+  // 確保 DOM 渲染完再繪製圖表
   setTimeout(() => renderCharts(stockId, analysis.alerts), 0);
 }
 
@@ -514,6 +520,7 @@ function renderCharts(stockId, alerts = []) {
   }
 
   // ==================== 2. 防呆保護一般圖表 ====================
+  // 加入 spanGaps: false 確保沒有資料的地方會留空斷線
   const commonOptions = {
     responsive: true, maintainAspectRatio: false, spanGaps: false,
     scales: { x: { ticks: { color: textColor }, grid: { color: gridColor } }, y: { ticks: { color: textColor }, grid: { color: gridColor } } },
@@ -530,7 +537,7 @@ function renderCharts(stockId, alerts = []) {
 
   const createChart = (canvasId, type, datasets, yAxisOptions = {}) => {
     const canvas = document.getElementById(canvasId);
-    if (!canvas) return; // 沒抓到畫面上的容器就安全跳過，避免當機
+    if (!canvas) return; // 沒抓到 HTML 容器就安全跳過，避免當機
     if (currentCharts[canvasId]) currentCharts[canvasId].destroy();
     const ctx = canvas.getContext('2d');
     const opts = JSON.parse(JSON.stringify(commonOptions));

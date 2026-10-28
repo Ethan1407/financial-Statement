@@ -1,0 +1,254 @@
+{
+  "summary_table": {
+    "2330": {
+      "industry": "半導體業",
+      "isFinancial": false,
+      "none_counts": {
+        "revenue": 0,
+        "revenueYoY": 4,
+        "grossMargin": 0,
+        "operatingMargin": 0,
+        "debtRatio": 0,
+        "currentRatio": 0,
+        "arDays": 0,
+        "invDays": 0,
+        "operatingCF": 0,
+        "financingCF": 0,
+        "freeCF": 0,
+        "interestCoverage": 0,
+        "quickRatio": 0,
+        "cashEnd": 0
+      }
+    },
+    "2317": {
+      "industry": "其他電子業",
+      "isFinancial": false,
+      "none_counts": {
+        "revenue": 0,
+        "revenueYoY": 4,
+        "grossMargin": 0,
+        "operatingMargin": 0,
+        "debtRatio": 0,
+        "currentRatio": 0,
+        "arDays": 0,
+        "invDays": 0,
+        "operatingCF": 0,
+        "financingCF": 0,
+        "freeCF": 0,
+        "interestCoverage": 0,
+        "quickRatio": 0,
+        "cashEnd": 0
+      }
+    },
+    "2454": {
+      "industry": "半導體業",
+      "isFinancial": false,
+      "none_counts": {
+        "revenue": 0,
+        "revenueYoY": 4,
+        "grossMargin": 0,
+        "operatingMargin": 0,
+        "debtRatio": 0,
+        "currentRatio": 0,
+        "arDays": 0,
+        "invDays": 0,
+        "operatingCF": 0,
+        "financingCF": 0,
+        "freeCF": 0,
+        "interestCoverage": 0,
+        "quickRatio": 0,
+        "cashEnd": 0
+      }
+    },
+    "2412": {
+      "industry": "通信網路業",
+      "isFinancial": false,
+      "none_counts": {
+        "revenue": 0,
+        "revenueYoY": 4,
+        "grossMargin": 0,
+        "operatingMargin": 0,
+        "debtRatio": 0,
+        "currentRatio": 0,
+        "arDays": 0,
+        "invDays": 0,
+        "operatingCF": 0,
+        "financingCF": 0,
+        "freeCF": 0,
+        "interestCoverage": 0,
+        "quickRatio": 0,
+        "cashEnd": 0
+      }
+    },
+    "1101": {
+      "industry": "水泥工業",
+      "isFinancial": false,
+      "none_counts": {
+        "revenue": 0,
+        "revenueYoY": 4,
+        "grossMargin": 0,
+        "operatingMargin": 0,
+        "debtRatio": 0,
+        "currentRatio": 0,
+        "arDays": 0,
+        "invDays": 0,
+        "operatingCF": 0,
+        "financingCF": 0,
+        "freeCF": 0,
+        "interestCoverage": 0,
+        "quickRatio": 0,
+        "cashEnd": 0
+      }
+    },
+    "2603": {
+      "industry": "航運業",
+      "isFinancial": false,
+      "none_counts": {
+        "revenue": 0,
+        "revenueYoY": 4,
+        "grossMargin": 0,
+        "operatingMargin": 0,
+        "debtRatio": 0,
+        "currentRatio": 0,
+        "arDays": 0,
+        "invDays": 0,
+        "operatingCF": 0,
+        "financingCF": 0,
+        "freeCF": 0,
+        "interestCoverage": 0,
+        "quickRatio": 0,
+        "cashEnd": 0
+      }
+    },
+    "1301": {
+      "industry": "塑膠工業",
+      "isFinancial": false,
+      "none_counts": {
+        "revenue": 0,
+        "revenueYoY": 4,
+        "grossMargin": 0,
+        "operatingMargin": 0,
+        "debtRatio": 0,
+        "currentRatio": 0,
+        "arDays": 0,
+        "invDays": 0,
+        "operatingCF": 0,
+        "financingCF": 0,
+        "freeCF": 0,
+        "interestCoverage": 0,
+        "quickRatio": 0,
+        "cashEnd": 0
+      }
+    },
+    "2002": {
+      "industry": "鋼鐵工業",
+      "isFinancial": false,
+      "none_counts": {
+        "revenue": 0,
+        "revenueYoY": 4,
+        "grossMargin": 0,
+        "operatingMargin": 0,
+        "debtRatio": 0,
+        "currentRatio": 0,
+        "arDays": 0,
+        "invDays": 0,
+        "operatingCF": 0,
+        "financingCF": 0,
+        "freeCF": 0,
+        "interestCoverage": 0,
+        "quickRatio": 0,
+        "cashEnd": 0
+      }
+    },
+    "2912": {
+      "industry": "貿易百貨",
+      "isFinancial": false,
+      "none_counts": {
+        "revenue": 0,
+        "revenueYoY": 4,
+        "grossMargin": 0,
+        "operatingMargin": 0,
+        "debtRatio": 0,
+        "currentRatio": 0,
+        "arDays": 0,
+        "invDays": 0,
+        "operatingCF": 0,
+        "financingCF": 0,
+        "freeCF": 0,
+        "interestCoverage": 0,
+        "quickRatio": 0,
+        "cashEnd": 0
+      }
+    },
+    "6446": {
+      "industry": "生技醫療業",
+      "isFinancial": false,
+      "none_counts": {
+        "revenue": 0,
+        "revenueYoY": 4,
+        "grossMargin": 0,
+        "operatingMargin": 0,
+        "debtRatio": 0,
+        "currentRatio": 0,
+        "arDays": 0,
+        "invDays": 0,
+        "operatingCF": 0,
+        "financingCF": 0,
+        "freeCF": 0,
+        "interestCoverage": 0,
+        "quickRatio": 0,
+        "cashEnd": 0
+      }
+    },
+    "2881": {
+      "industry": "金融保險",
+      "isFinancial": true,
+      "none_counts": {
+        "revenue": 0,
+        "revenueYoY": 4,
+        "grossMargin": 30,
+        "operatingMargin": 0,
+        "debtRatio": 0,
+        "currentRatio": 30,
+        "arDays": 30,
+        "invDays": 30,
+        "operatingCF": 0,
+        "financingCF": 0,
+        "freeCF": 30,
+        "interestCoverage": 30,
+        "quickRatio": 30,
+        "cashEnd": 0
+      }
+    },
+    "2887": {
+      "industry": "金融保險",
+      "isFinancial": true,
+      "none_counts": {
+        "revenue": 0,
+        "revenueYoY": 4,
+        "grossMargin": 30,
+        "operatingMargin": 0,
+        "debtRatio": 0,
+        "currentRatio": 30,
+        "arDays": 30,
+        "invDays": 30,
+        "operatingCF": 0,
+        "financingCF": 0,
+        "freeCF": 30,
+        "interestCoverage": 30,
+        "quickRatio": 30,
+        "cashEnd": 0
+      }
+    }
+  },
+  "debug_raw_fields": {},
+  "tsmc_2024_validation": {
+    "quarters": {
+      "2024Q1": 592644.0,
+      "2024Q2": 673510.0,
+      "2024Q3": 759692.0,
+      "2024Q4": 868461.0
+    },
+    "total_millions": 2894307.0
+  }
+}
