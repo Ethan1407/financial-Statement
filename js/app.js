@@ -1,3 +1,9 @@
+// 自動判斷目前環境：如果在自己的電腦測試就連 127.0.0.1，如果上雲端就連 Render
+const API_BASE_URL = (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost')
+    ? 'http://127.0.0.1:5000'
+    : 'https://ethan-stock-api.onrender.com';
+
+// 全局狀態管理
 let portfolio = JSON.parse(localStorage.getItem('stock_portfolio') || '[]');
 let currentCharts = {};
 
@@ -44,7 +50,7 @@ async function addStock() {
   btn.innerText = '爬取中...'; btn.disabled = true;
 
   try {
-    const response = await fetch(`https://ethan-stock-api.onrender.com/api/stock/${id}`);
+    const response = await fetch(`${API_BASE_URL}/api/stock/${id}`);
     const result = await response.json();
     if (!response.ok) { alert(result.error || '爬取失敗，請確認代號正確'); return; }
 
