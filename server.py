@@ -196,8 +196,9 @@ def fetch_finmind_data(dataset, stock_id, start_date=START_DATE):
 def get_raw_from_db(stock_id):
     if not supabase: return {}
     try:
-        res = supabase.table("finmind_raw").select("dataset, payload").eq("stock_id", stock_id).execute()
-        return {r["dataset"]: r["payload"] for r in res.data}
+        # 將 payload 改回 raw_data
+        res = supabase.table("finmind_raw").select("dataset, raw_data").eq("stock_id", stock_id).execute()
+        return {r["dataset"]: r["raw_data"] for r in res.data}
     except Exception as e:
         print(f"[{stock_id}] finmind_raw 讀取失敗: {e}")
         return None
@@ -208,8 +209,8 @@ def upsert_raw_to_db(stock_id, dataset, data):
         supabase.table("finmind_raw").upsert({
             "stock_id": stock_id,
             "dataset": dataset,
-            "payload": data,
-            "fetched_at": get_iso_now()
+            "raw_data": data,         # 將 payload 改回 raw_data
+            "updated_at": get_iso_now() # 將 fetched_at 改回 updated_at
         }).execute()
     except Exception as e:
         print(f"[{stock_id}] finmind_raw 寫入失敗 ({dataset}): {e}")
