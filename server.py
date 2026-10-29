@@ -16,9 +16,10 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, '.env')
 load_dotenv(dotenv_path=env_path, override=True)
 
+# 溫柔提示，不要直接讓伺服器當機
 FINMIND_TOKEN = os.getenv("FINMIND_TOKEN")
 if not FINMIND_TOKEN:
-    print("❌ 嚴重警告：找不到 FINMIND_TOKEN！請確認您已在 .env 檔案中設定，否則將無法抓取資料。")
+    print("❌ 嚴重警告：找不到 FINMIND_TOKEN！請確認您已在 .env 或伺服器環境變數中設定。")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
@@ -169,7 +170,7 @@ def get_stock_lock(stock_id):
 
 def fetch_finmind_data(dataset, stock_id, start_date=START_DATE):
     if not FINMIND_TOKEN:
-        return None, "伺服器缺少 FinMind Token，請管理員檢查 .env 設定"
+        return None, "伺服器缺少 FinMind Token，請管理員檢查設定"
 
     backoff_time = finmind_backoff.get(stock_id)
     if backoff_time and time.time() - backoff_time < 600:
