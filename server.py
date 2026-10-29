@@ -16,7 +16,6 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, '.env')
 load_dotenv(dotenv_path=env_path, override=True)
 
-# 溫柔提示，不要直接讓伺服器當機
 FINMIND_TOKEN = os.getenv("FINMIND_TOKEN")
 if not FINMIND_TOKEN:
     print("❌ 嚴重警告：找不到 FINMIND_TOKEN！請確認您已在 .env 檔案中設定，否則將無法抓取資料。")
@@ -196,7 +195,6 @@ def fetch_finmind_data(dataset, stock_id, start_date=START_DATE):
 def get_raw_from_db(stock_id):
     if not supabase: return {}
     try:
-        # 將 payload 改回 raw_data
         res = supabase.table("finmind_raw").select("dataset, raw_data").eq("stock_id", stock_id).execute()
         return {r["dataset"]: r["raw_data"] for r in res.data}
     except Exception as e:
@@ -209,8 +207,8 @@ def upsert_raw_to_db(stock_id, dataset, data):
         supabase.table("finmind_raw").upsert({
             "stock_id": stock_id,
             "dataset": dataset,
-            "raw_data": data,         # 將 payload 改回 raw_data
-            "updated_at": get_iso_now() # 將 fetched_at 改回 updated_at
+            "raw_data": data,
+            "updated_at": get_iso_now()
         }).execute()
     except Exception as e:
         print(f"[{stock_id}] finmind_raw 寫入失敗 ({dataset}): {e}")
