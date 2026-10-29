@@ -16,12 +16,15 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, '.env')
 load_dotenv(dotenv_path=env_path, override=True)
 
+# 溫柔提示，不要直接讓伺服器當機
 FINMIND_TOKEN = os.getenv("FINMIND_TOKEN")
 if not FINMIND_TOKEN:
-    raise ValueError("找不到 API Token！請檢查 .env")
+    print("❌ 嚴重警告：找不到 FINMIND_TOKEN！請確認您已在 .env 檔案中設定，否則將無法抓取資料。")
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("⚠️ 提示：未偵測到 Supabase 設定，系統將以純記憶體模式運作 (重啟後資料將遺失)。")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 # ================= 系統常數與全域變數 =================
@@ -40,8 +43,12 @@ finmind_backoff = {}
 stock_locks = {}
 global_lock = threading.Lock()
 
-# 每日配額與統計
-FULL_FETCH_DAILY_CAP = int(os.getenv("FULL_FETCH_DAILY_CAP", 40))
+# 每日配額與統計防呆轉換
+try:
+    FULL_FETCH_DAILY_CAP = int(os.getenv("FULL_FETCH_DAILY_CAP", 40))
+except (TypeError, ValueError):
+    FULL_FETCH_DAILY_CAP = 40
+
 daily_fetches = 0
 last_reset_date = ""
 
@@ -61,12 +68,18 @@ stats = {
 
 app = Flask(__name__)
 allowed_origins = os.getenv("ALLOWED_ORIGINS")
-if allowed_origins:
-    origins_list = [o.strip() for o in allowed_origins.split(',')]
+if allowed_origins and allowed_origins != "*":
+    origins_list = [o.strip() for o in allowed_origins.split(',') if o.strip()]
     CORS(app, origins=origins_list)
 else:
     print("⚠️ 警告：未設定 ALLOWED_ORIGINS，CORS 將允許所有來源跨域請求！")
     CORS(app)
+
+# ================= 全局錯誤攔截 =================
+@app.errorhandler(Exception)
+def handle_exception(e):
+    print(f"❌ 伺服器內部錯誤: {str(e)}")
+    return jsonify({"error": f"伺服器發生非預期錯誤，請查看終端機日誌。({str(e)})"}), 500
 
 # ================= 輔助函式 =================
 def get_tw_now():
@@ -111,8 +124,11 @@ def check_daily_cap():
 
 def get_check_ttl(complete):
     override = os.getenv("CHECK_TTL_OVERRIDE_SECONDS")
-    if override is not None:
-        return int(override)
+    if override:
+        try:
+            return int(override)
+        except (TypeError, ValueError):
+            pass
     
     if not complete:
         return 3600
@@ -134,8 +150,11 @@ def get_check_ttl(complete):
 
 def get_monthly_check_ttl():
     override = os.getenv("CHECK_TTL_OVERRIDE_SECONDS")
-    if override is not None:
-        return int(override)
+    if override:
+        try:
+            return int(override)
+        except (TypeError, ValueError):
+            pass
         
     tw_now = get_tw_now()
     day = tw_now.day
@@ -150,6 +169,9 @@ def get_stock_lock(stock_id):
         return stock_locks[stock_id]
 
 def fetch_finmind_data(dataset, stock_id, start_date=START_DATE):
+    if not FINMIND_TOKEN:
+        return None, "伺服器缺少 FinMind Token，請管理員檢查 .env 設定"
+
     backoff_time = finmind_backoff.get(stock_id)
     if backoff_time and time.time() - backoff_time < 600:
         return None, "BACKOFF"
@@ -798,10 +820,15 @@ def process_monthly(stock_id, force_refresh=False):
 # ================= 網頁呼叫路由 =================
 @app.before_request
 def before_request_hook():
+    # CORS 預檢請求不列入限流計算，直接放行交給 CORS 處理
+    if request.method == 'OPTIONS':
+        return
     if request.path.startswith('/api/stock') or request.path.startswith('/api/monthly'):
         client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
         if client_ip:
             client_ip = client_ip.split(',')[0].strip()
+        else:
+            client_ip = "unknown"
         if not check_rate_limit(client_ip):
             return jsonify({"error": "請求過於頻繁，請稍後再試"}), 429
 
@@ -841,7 +868,9 @@ def api_get_stock(stock_id):
             cached = memory_cache[cache_key]['data']
             etag = generate_etag(stock_id, cached.get('_updated_at', ''), limit)
             if request.headers.get('If-None-Match') == etag:
-                return '', 304
+                resp = make_response('', 304)
+                resp.headers['ETag'] = etag
+                return resp
             res_copy = dict(cached)
             res_copy.pop("_updated_at", None)
             res_copy['quarters'] = res_copy['quarters'][-limit:] if limit < len(res_copy['quarters']) else res_copy['quarters']
@@ -864,7 +893,9 @@ def api_get_stock(stock_id):
     memory_cache[cache_key] = {'time': now, 'data': result}
     
     if request.headers.get('If-None-Match') == etag:
-        return '', 304
+        resp = make_response('', 304)
+        resp.headers['ETag'] = etag
+        return resp
         
     res_copy = dict(result)
     res_copy.pop("_updated_at", None)
@@ -966,7 +997,9 @@ def api_get_monthly(stock_id):
             cached = monthly_memory_cache[cache_key]['data']
             etag = generate_etag(stock_id, cached.get('_updated_at', ''), limit)
             if request.headers.get('If-None-Match') == etag:
-                return '', 304
+                resp = make_response('', 304)
+                resp.headers['ETag'] = etag
+                return resp
             res_copy = dict(cached)
             res_copy.pop("_updated_at", None)
             res_copy['months'] = res_copy['months'][-limit:] if limit < len(res_copy['months']) else res_copy['months']
@@ -989,7 +1022,9 @@ def api_get_monthly(stock_id):
     monthly_memory_cache[cache_key] = {'time': now, 'data': result}
     
     if request.headers.get('If-None-Match') == etag:
-        return '', 304
+        resp = make_response('', 304)
+        resp.headers['ETag'] = etag
+        return resp
         
     res_copy = dict(result)
     res_copy.pop("_updated_at", None)
@@ -1090,4 +1125,6 @@ def api_admin_stats():
 
 if __name__ == '__main__':
     is_debug = os.getenv("FLASK_DEBUG", "False").lower() == "true"
-    app.run(port=5000, debug=is_debug)
+    # 強制綁定 0.0.0.0，讓外部或跨域連線不會被本機網路層阻擋
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=is_debug)
