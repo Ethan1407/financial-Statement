@@ -3,47 +3,59 @@ import re
 import requests
 import json
 import time
+import sys
+import traceback
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, make_response
 from flask_cors import CORS
 from supabase import create_client, Client
+from werkzeug.exceptions import HTTPException
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 # ================= 載入環境變數 =================
 current_dir = os.path.dirname(os.path.abspath(__file__))
 env_path = os.path.join(current_dir, '.env')
-load_dotenv(dotenv_path=env_path, override=True)
+load_dotenv(dotenv_path=env_path, override=False)
 
-# 溫柔提示，不要直接讓伺服器當機
 FINMIND_TOKEN = os.getenv("FINMIND_TOKEN")
-if not FINMIND_TOKEN:
-    print("❌ 嚴重警告：找不到 FINMIND_TOKEN！請確認您已在 .env 或伺服器環境變數中設定。")
-
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("⚠️ 提示：未偵測到 Supabase 設定，系統將以純記憶體模式運作 (重啟後資料將遺失)。")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS")
+ADMIN_KEY = os.getenv("ADMIN_KEY")
+
+print("=== 環境變數狀態 ===")
+print(f"FINMIND_TOKEN: {'已設定' if FINMIND_TOKEN else '未設定'}")
+print(f"SUPABASE_URL: {'已設定' if SUPABASE_URL else '未設定'}")
+print(f"SUPABASE_SERVICE_KEY: {'已設定' if SUPABASE_KEY else '未設定'}")
+print(f"ALLOWED_ORIGINS: {'已設定' if ALLOWED_ORIGINS else '未設定'}")
+print(f"ADMIN_KEY: {'已設定' if ADMIN_KEY else '未設定'}")
+print("====================")
+
+supabase = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"❌ Supabase 初始化失敗，退回純記憶體模式: {e}")
+else:
+    print("⚠️ 提示：未偵測到 Supabase 設定，系統將以純記憶體模式運作。")
 
 # ================= 系統常數與全域變數 =================
 CALC_VERSION = 4
 START_DATE = "2019-01-01"
 
-# 記憶體限流 (1分鐘30次)
 request_history = {}
 RATE_LIMIT = 30
 RATE_WINDOW = 60
 
-# 快取與鎖
 memory_cache = {}
 monthly_memory_cache = {}
 finmind_backoff = {}
 stock_locks = {}
 global_lock = threading.Lock()
 
-# 每日配額與統計防呆轉換
 try:
     FULL_FETCH_DAILY_CAP = int(os.getenv("FULL_FETCH_DAILY_CAP", 40))
 except (TypeError, ValueError):
@@ -56,20 +68,14 @@ stats = {
     "finmind_calls": 0,
     "full_fetches_today": 0,
     "sources": {
-        "db": 0,
-        "db-verified": 0,
-        "updated": 0,
-        "full": 0,
-        "recompute": 0,
-        "db-stale": 0,
-        "mem-cache": 0
+        "db": 0, "db-verified": 0, "updated": 0, "full": 0,
+        "recompute": 0, "db-stale": 0, "mem-cache": 0
     }
 }
 
 app = Flask(__name__)
-allowed_origins = os.getenv("ALLOWED_ORIGINS")
-if allowed_origins and allowed_origins != "*":
-    origins_list = [o.strip() for o in allowed_origins.split(',') if o.strip()]
+if ALLOWED_ORIGINS and ALLOWED_ORIGINS != "*":
+    origins_list = [o.strip() for o in ALLOWED_ORIGINS.split(',') if o.strip()]
     CORS(app, origins=origins_list)
 else:
     print("⚠️ 警告：未設定 ALLOWED_ORIGINS，CORS 將允許所有來源跨域請求！")
@@ -78,8 +84,11 @@ else:
 # ================= 全局錯誤攔截 =================
 @app.errorhandler(Exception)
 def handle_exception(e):
-    print(f"❌ 伺服器內部錯誤: {str(e)}")
-    return jsonify({"error": f"伺服器發生非預期錯誤，請查看終端機日誌。({str(e)})"}), 500
+    if isinstance(e, HTTPException):
+        return e
+    print("❌ 伺服器內部錯誤:")
+    traceback.print_exc()
+    return jsonify({"error": f"伺服器發生非預期錯誤，請查看終端機日誌。({type(e).__name__})"}), 500
 
 # ================= 輔助函式 =================
 def get_tw_now():
@@ -87,6 +96,20 @@ def get_tw_now():
 
 def get_iso_now():
     return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
+
+def safe_parse_iso(date_str):
+    """安全解析 Supabase ISO 時間字串，相容 Py 3.10 以下環境"""
+    if not date_str:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    s = str(date_str).replace('Z', '+00:00')
+    s = re.sub(r'(\.\d{6})\d+', r'\1', s)
+    try:
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return datetime.min.replace(tzinfo=timezone.utc)
 
 def check_rate_limit(ip):
     now = time.time()
@@ -125,42 +148,25 @@ def check_daily_cap():
 def get_check_ttl(complete):
     override = os.getenv("CHECK_TTL_OVERRIDE_SECONDS")
     if override:
-        try:
-            return int(override)
-        except (TypeError, ValueError):
-            pass
-    
+        try: return int(override)
+        except: pass
     if not complete:
         return 3600
-
     tw_now = get_tw_now()
     month, day = tw_now.month, tw_now.day
-
-    is_earnings_season = False
-    if (month == 1 and day >= 20) or month == 2 or (month == 3 and day <= 31):
-        is_earnings_season = True
-    elif month == 4 and day >= 15 or (month == 5 and day <= 15):
-        is_earnings_season = True
-    elif month == 7 and day >= 15 or (month == 8 and day <= 14):
-        is_earnings_season = True
-    elif month == 10 and day >= 15 or (month == 11 and day <= 14):
-        is_earnings_season = True
-
-    return 6 * 3600 if is_earnings_season else 3 * 86400
+    is_earn = (month == 1 and day >= 20) or month == 2 or (month == 3 and day <= 31) or \
+              (month == 4 and day >= 15) or (month == 5 and day <= 15) or \
+              (month == 7 and day >= 15) or (month == 8 and day <= 14) or \
+              (month == 10 and day >= 15) or (month == 11 and day <= 14)
+    return 6 * 3600 if is_earn else 3 * 86400
 
 def get_monthly_check_ttl():
     override = os.getenv("CHECK_TTL_OVERRIDE_SECONDS")
     if override:
-        try:
-            return int(override)
-        except (TypeError, ValueError):
-            pass
-        
+        try: return int(override)
+        except: pass
     tw_now = get_tw_now()
-    day = tw_now.day
-    return 6 * 3600 if day <= 12 else 2 * 86400
-
-print(f"🚀 初始化設定 | CALC_VERSION: {CALC_VERSION} | 預設 CHECK_TTL: 動態判斷")
+    return 6 * 3600 if tw_now.day <= 12 else 2 * 86400
 
 def get_stock_lock(stock_id):
     with global_lock:
@@ -170,7 +176,8 @@ def get_stock_lock(stock_id):
 
 def fetch_finmind_data(dataset, stock_id, start_date=START_DATE):
     if not FINMIND_TOKEN:
-        return None, "伺服器缺少 FinMind Token，請管理員檢查設定"
+        print(f"[{stock_id}] {dataset} 請求失敗: Token 未設定")
+        return None, "TOKEN_MISSING"
 
     backoff_time = finmind_backoff.get(stock_id)
     if backoff_time and time.time() - backoff_time < 600:
@@ -180,18 +187,29 @@ def fetch_finmind_data(dataset, stock_id, start_date=START_DATE):
     payload = {"dataset": dataset, "data_id": stock_id, "start_date": start_date, "token": FINMIND_TOKEN}
     try:
         resp = requests.get(url, params=payload, timeout=15)
-        if resp.status_code != 200 or resp.json().get("msg") != "success":
-            finmind_backoff[stock_id] = time.time()
-            return None, f"FinMind API 錯誤 ({resp.status_code})"
+        if resp.status_code != 200:
+            print(f"[{stock_id}] FinMind HTTP 錯誤: {resp.status_code} - {resp.text}")
+            if resp.status_code == 429:
+                finmind_backoff[stock_id] = time.time()
+                return None, "RATE_LIMITED"
+            return None, f"HTTP_{resp.status_code}"
         
-        data = resp.json().get("data", [])
-        if data and dataset == "TaiwanStockFinancialStatements":
-            print(f"[{stock_id}] 探測回傳資料欄位: {list(data[-1].keys())}")
+        resp_json = resp.json()
+        if resp_json.get("msg") != "success":
+            msg = resp_json.get("msg", "unknown")
+            print(f"[{stock_id}] FinMind API 錯誤: {msg}")
+            # 只有明確被限制時才 backoff
+            if "limit" in msg.lower(): finmind_backoff[stock_id] = time.time()
+            return None, f"API_ERROR: {msg}"
             
+        data = resp_json.get("data", [])
         return data, None
+    except requests.exceptions.Timeout:
+        print(f"[{stock_id}] 請求 FinMind 發生逾時")
+        return None, "TIMEOUT"
     except Exception as e:
-        finmind_backoff[stock_id] = time.time()
-        return None, f"網路例外: {str(e)}"
+        print(f"[{stock_id}] 網路例外: {str(e)}")
+        return None, "NETWORK_ERROR"
 
 def get_raw_from_db(stock_id):
     if not supabase: return {}
@@ -206,10 +224,7 @@ def upsert_raw_to_db(stock_id, dataset, data):
     if not supabase or not data: return
     try:
         supabase.table("finmind_raw").upsert({
-            "stock_id": stock_id,
-            "dataset": dataset,
-            "raw_data": data,
-            "updated_at": get_iso_now()
+            "stock_id": stock_id, "dataset": dataset, "raw_data": data, "updated_at": get_iso_now()
         }).execute()
     except Exception as e:
         print(f"[{stock_id}] finmind_raw 寫入失敗 ({dataset}): {e}")
@@ -228,14 +243,10 @@ def scale_val(val, factor=1000000):
     return val / factor if val is not None else None
 
 def safe_div(n, d, mult=1):
-    if n is not None and d is not None and d != 0:
-        return (n / d) * mult
-    return None
+    return (n / d) * mult if n is not None and d is not None and d != 0 else None
 
 def safe_round(val, decimals=0):
-    if val is not None:
-        return round(val, decimals)
-    return None
+    return round(val, decimals) if val is not None else None
 
 # ================= 運算引擎 =================
 def compute_financials_from_raw(stock_id, raw_dict):
@@ -255,8 +266,7 @@ def compute_financials_from_raw(stock_id, raw_dict):
             ind = row.get("industry_category")
             if ind and ind not in industry_all:
                 industry_all.append(ind)
-        if industry_all:
-            industry = industry_all[0]
+        if industry_all: industry = industry_all[0]
             
     fin_keywords = ["金融", "保險", "證券", "銀行"]
     if any(any(kw in ind for kw in fin_keywords) for ind in industry_all):
@@ -412,9 +422,9 @@ def compute_financials_from_raw(stock_id, raw_dict):
         if "DEBT_RANGE" in q['qualityFlags']: warnings.append(f"{q['q']} 負債比異常(小於0或大於100)")
         if "MARGIN_RANGE" in q['qualityFlags']: warnings.append(f"{q['q']} 利潤率異常(超出±100%)")
         if "REV_NEGATIVE" in q['qualityFlags']: warnings.append(f"{q['q']} 營收小於等於0")
-        if "CF_JUMP" in q['qualityFlags']: warnings.append(f"{q['q']} 營業現金流單季絕對值暴增(可能累計相減異常)")
-        if "QUICK_GT_CURRENT" in q['qualityFlags']: warnings.append(f"{q['q']} 速動比率不可能大於流動比率(邏輯異常)")
-        if "QUICK_EQ_CURRENT" in q['qualityFlags']: warnings.append(f"{q['q']} 存貨大於0但速動比率四捨五入後等於流動比率(可能存貨過小)")
+        if "CF_JUMP" in q['qualityFlags']: warnings.append(f"{q['q']} 營業現金流單季絕對值暴增")
+        if "QUICK_GT_CURRENT" in q['qualityFlags']: warnings.append(f"{q['q']} 速動比不可能大於流動比")
+        if "QUICK_EQ_CURRENT" in q['qualityFlags']: warnings.append(f"{q['q']} 存貨過小導致速動與流動相同")
 
     latestQuarterPartial = bool(quarters_data[-1]["missing"]) if quarters_data else False
     latestCompleteQuarter = next((q["q"] for q in reversed(quarters_data) if not q["missing"]), None)
@@ -438,23 +448,18 @@ def compute_monthly_from_raw(stock_id, raw_dict):
             try:
                 y = int(row["revenue_year"])
                 m = int(row["revenue_month"])
-            except:
-                continue
+            except: continue
         elif "date" in row:
             try:
                 d = datetime.strptime(row["date"], "%Y-%m-%d")
                 y, m = d.year, d.month
-            except:
-                continue
-        else:
-            continue
+            except: continue
+        else: continue
             
         rev_val = row.get("revenue", None)
         if rev_val is not None:
-            try:
-                rev_dict[(y, m)] = float(rev_val) / 1000000.0
-            except:
-                pass
+            try: rev_dict[(y, m)] = float(rev_val) / 1000000.0
+            except: pass
 
     monthly_data = []
     sorted_keys = sorted(rev_dict.keys())
@@ -481,11 +486,8 @@ def compute_monthly_from_raw(stock_id, raw_dict):
             cum_yoy = (cum_rev - cum_rev_last) / abs(cum_rev_last) * 100
 
         monthly_data.append({
-            "ym": ym_str,
-            "revenue": safe_round(rev, 0),
-            "mom": safe_round(mom, 2),
-            "yoy": safe_round(yoy, 2),
-            "cumYoY": safe_round(cum_yoy, 2)
+            "ym": ym_str, "revenue": safe_round(rev, 0), "mom": safe_round(mom, 2),
+            "yoy": safe_round(yoy, 2), "cumYoY": safe_round(cum_yoy, 2)
         })
 
     latest_month = monthly_data[-1]["ym"] if monthly_data else None
@@ -495,11 +497,7 @@ def compute_monthly_from_raw(stock_id, raw_dict):
         dates = [r.get("date") for r in raw_data if r.get("date")]
         if dates: latest_date = max(dates)
 
-    return {
-        "latestMonth": latest_month,
-        "months": monthly_data,
-        "_latest_date": latest_date
-    }
+    return { "latestMonth": latest_month, "months": monthly_data, "_latest_date": latest_date }
 
 # ================= 核心流 =================
 def process_financials(stock_id, force_refresh=False, allow_full=True):
@@ -515,7 +513,7 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
                 db_error = True
 
         if db_error:
-            return None, "資料庫無法連線，暫不提供服務", 502
+            return None, "資料庫連線異常，暫不提供服務", 502
 
         if db_res:
             db_calc_v = db_res.get("calc_version", 0)
@@ -528,17 +526,13 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
                 new_res = compute_financials_from_raw(stock_id, raw_dict)
                 latest_inc_date = new_res.pop("_latest_income_date")
                 now_str = get_iso_now()
-                
                 try:
                     supabase.table("stock_results").upsert({
                         "stock_id": stock_id, "calc_version": CALC_VERSION, "result": new_res,
                         "latest_income_date": latest_inc_date, "latest_quarter": new_res.get("latestCompleteQuarter"),
-                        "complete": not new_res.get("latestQuarterPartial"),
-                        "checked_at": db_checked_at, "updated_at": now_str
+                        "complete": not new_res.get("latestQuarterPartial"), "checked_at": db_checked_at, "updated_at": now_str
                     }).execute()
-                except Exception as e:
-                    print(f"[{stock_id}] stock_results 寫入/更新失敗: {e}")
-                
+                except Exception: pass
                 db_res = {"calc_version": CALC_VERSION, "result": new_res, "checked_at": db_checked_at, "complete": not new_res.get("latestQuarterPartial"), "latest_income_date": latest_inc_date, "updated_at": now_str}
                 record_stats("recompute", 0)
                 source = "recompute"
@@ -551,7 +545,7 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
             db_complete = db_res.get("complete", True)
             
             ttl = get_check_ttl(db_complete)
-            dt_checked = datetime.fromisoformat(db_checked_at.replace('Z', '+00:00')) if db_checked_at else datetime.min.replace(tzinfo=timezone.utc)
+            dt_checked = safe_parse_iso(db_checked_at)
             
             if (datetime.now(timezone.utc) - dt_checked).total_seconds() < ttl and not force_refresh:
                 result = db_res["result"]
@@ -565,10 +559,10 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
             
             if err:
                 res = db_res["result"]
-                res["warnings"].append("FinMind 連線異常，使用過期資料")
-                res["meta"] = {"source": "db-stale", "finmindCalls": 0 if err == "BACKOFF" else 1, "checkedAt": db_checked_at, "stale": True}
+                res["warnings"].append(f"FinMind 更新失敗 ({err})，目前為過期快取資料")
+                res["meta"] = {"source": "db-stale", "finmindCalls": 0 if err in ["BACKOFF", "TOKEN_MISSING"] else 1, "checkedAt": db_checked_at, "stale": True}
                 res["_updated_at"] = db_res.get("updated_at", get_iso_now())
-                record_stats("db-stale", 0 if err == "BACKOFF" else 1)
+                record_stats("db-stale", 0 if err in ["BACKOFF", "TOKEN_MISSING"] else 1)
                 return res, None, 200
                 
             new_max_date = max([item.get("date", "") for item in probe_data]) if probe_data else START_DATE
@@ -576,7 +570,6 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
             old_income = raw_dict.get("TaiwanStockFinancialStatements", [])
             old_max_date = db_res.get("latest_income_date", START_DATE)
             
-            is_updated = False
             finmind_calls = 1
             need_recompute = False
             
@@ -602,8 +595,7 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
                 probe_dict = {(i.get("date"), i.get("type"), i.get("origin_name")): i.get("value") for i in probe_data}
                 old_dict = {(i.get("date"), i.get("type"), i.get("origin_name")): i.get("value") for i in old_income if i.get("date") >= probe_start}
                 
-                changed = any(probe_dict.get(k) != old_dict.get(k) for k in probe_dict)
-                if changed:
+                if any(probe_dict.get(k) != old_dict.get(k) for k in probe_dict):
                     raw_dict["TaiwanStockFinancialStatements"] = merge_raw_data(old_income, probe_data)
                     upsert_raw_to_db(stock_id, "TaiwanStockFinancialStatements", raw_dict["TaiwanStockFinancialStatements"])
                     need_recompute = True
@@ -635,17 +627,14 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
                     supabase.table("stock_results").upsert({
                         "stock_id": stock_id, "calc_version": CALC_VERSION, "result": new_res,
                         "latest_income_date": latest_inc_date, "latest_quarter": new_res.get("latestCompleteQuarter"),
-                        "complete": not new_res.get("latestQuarterPartial"),
-                        "checked_at": now_str, "updated_at": now_str
+                        "complete": not new_res.get("latestQuarterPartial"), "checked_at": now_str, "updated_at": now_str
                     }).execute()
-                except Exception as e:
-                    print(f"[{stock_id}] stock_results 寫入/更新失敗: {e}")
+                except Exception: pass
                 result = new_res
             else:
                 try:
                     supabase.table("stock_results").update({"checked_at": now_str}).eq("stock_id", stock_id).execute()
-                except Exception as e:
-                    print(f"[{stock_id}] stock_results 寫入/更新失敗: {e}")
+                except Exception: pass
                 result = db_res["result"]
                 updated_at_val = db_res.get("updated_at", now_str)
                 
@@ -672,7 +661,7 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
                 for ds, f in fs.items():
                     data, err = f.result()
                     if err and ds == "TaiwanStockFinancialStatements":
-                        return None, "獲取新股票資料失敗", 502
+                        return None, f"獲取新股票資料失敗 ({err})", 502
                     raw_dict[ds] = data or []
                     upsert_raw_to_db(stock_id, ds, data)
 
@@ -684,11 +673,9 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
                 supabase.table("stock_results").upsert({
                     "stock_id": stock_id, "calc_version": CALC_VERSION, "result": new_res,
                     "latest_income_date": latest_inc_date, "latest_quarter": new_res.get("latestCompleteQuarter"),
-                    "complete": not new_res.get("latestQuarterPartial"),
-                    "checked_at": now_str, "updated_at": now_str
+                    "complete": not new_res.get("latestQuarterPartial"), "checked_at": now_str, "updated_at": now_str
                 }).execute()
-            except Exception as e:
-                print(f"[{stock_id}] stock_results 寫入/更新失敗: {e}")
+            except Exception: pass
             
             new_res["meta"] = {"source": "full", "finmindCalls": 4, "checkedAt": now_str, "stale": False}
             new_res["_updated_at"] = now_str
@@ -703,17 +690,16 @@ def process_monthly(stock_id, force_refresh=False):
             try:
                 res = supabase.table("monthly_results").select("*").eq("stock_id", stock_id).execute()
                 if res.data: db_res = res.data[0]
-            except Exception as e:
-                print(f"[{stock_id}] monthly_results 讀取失敗: {e}")
+            except Exception:
                 db_error = True
 
         if db_error:
-            return None, "資料庫無法連線，暫不提供服務", 502
+            return None, "資料庫連線異常，暫不提供服務", 502
 
         if db_res:
             db_checked_at = db_res.get("checked_at")
             ttl = get_monthly_check_ttl()
-            dt_checked = datetime.fromisoformat(db_checked_at.replace('Z', '+00:00')) if db_checked_at else datetime.min.replace(tzinfo=timezone.utc)
+            dt_checked = safe_parse_iso(db_checked_at)
             
             if (datetime.now(timezone.utc) - dt_checked).total_seconds() < ttl and not force_refresh:
                 result = db_res["result"]
@@ -727,9 +713,9 @@ def process_monthly(stock_id, force_refresh=False):
             
             if err:
                 res = db_res["result"]
-                res["meta"] = {"source": "db-stale", "finmindCalls": 0 if err == "BACKOFF" else 1, "checkedAt": db_checked_at, "stale": True}
+                res["meta"] = {"source": "db-stale", "finmindCalls": 0 if err in ["BACKOFF", "TOKEN_MISSING"] else 1, "checkedAt": db_checked_at, "stale": True}
                 res["_updated_at"] = db_res.get("updated_at", get_iso_now())
-                record_stats("db-stale", 0 if err == "BACKOFF" else 1)
+                record_stats("db-stale", 0 if err in ["BACKOFF", "TOKEN_MISSING"] else 1)
                 return res, None, 200
                 
             new_max_date = max([item.get("date", "") for item in probe_data]) if probe_data else START_DATE
@@ -749,8 +735,7 @@ def process_monthly(stock_id, force_refresh=False):
                 probe_dict = {(i.get("date"), i.get("type"), i.get("origin_name")): i.get("value") for i in probe_data}
                 old_dict = {(i.get("date"), i.get("type"), i.get("origin_name")): i.get("value") for i in old_revenue if i.get("date") >= probe_start}
                 
-                changed = any(probe_dict.get(k) != old_dict.get(k) for k in probe_dict)
-                if changed:
+                if any(probe_dict.get(k) != old_dict.get(k) for k in probe_dict):
                     raw_dict["TaiwanStockMonthRevenue"] = merge_raw_data(old_revenue, probe_data)
                     upsert_raw_to_db(stock_id, "TaiwanStockMonthRevenue", raw_dict["TaiwanStockMonthRevenue"])
                     need_recompute = True
@@ -767,17 +752,14 @@ def process_monthly(stock_id, force_refresh=False):
                 try:
                     supabase.table("monthly_results").upsert({
                         "stock_id": stock_id, "result": new_res,
-                        "latest_date": latest_date,
-                        "checked_at": now_str, "updated_at": now_str
+                        "latest_date": latest_date, "checked_at": now_str, "updated_at": now_str
                     }).execute()
-                except Exception as e:
-                    print(f"[{stock_id}] monthly_results 寫入/更新失敗: {e}")
+                except Exception: pass
                 result = new_res
             else:
                 try:
                     supabase.table("monthly_results").update({"checked_at": now_str}).eq("stock_id", stock_id).execute()
-                except Exception as e:
-                    print(f"[{stock_id}] monthly_results 寫入/更新失敗: {e}")
+                except Exception: pass
                 result = db_res["result"]
                 updated_at_val = db_res.get("updated_at", now_str)
                 
@@ -793,7 +775,7 @@ def process_monthly(stock_id, force_refresh=False):
                 
             probe_data, err = fetch_finmind_data("TaiwanStockMonthRevenue", stock_id)
             if err:
-                return None, "獲取新股票資料失敗", 502
+                return None, f"獲取新股票資料失敗 ({err})", 502
                 
             raw_dict = {"TaiwanStockMonthRevenue": probe_data}
             upsert_raw_to_db(stock_id, "TaiwanStockMonthRevenue", probe_data)
@@ -805,11 +787,9 @@ def process_monthly(stock_id, force_refresh=False):
             try:
                 supabase.table("monthly_results").upsert({
                     "stock_id": stock_id, "result": new_res,
-                    "latest_date": latest_date,
-                    "checked_at": now_str, "updated_at": now_str
+                    "latest_date": latest_date, "checked_at": now_str, "updated_at": now_str
                 }).execute()
-            except Exception as e:
-                print(f"[{stock_id}] monthly_results 寫入/更新失敗: {e}")
+            except Exception: pass
             
             new_res["fetchedAt"] = now_str
             new_res["meta"] = {"source": "full", "finmindCalls": 1, "checkedAt": now_str, "stale": False}
@@ -820,7 +800,6 @@ def process_monthly(stock_id, force_refresh=False):
 # ================= 網頁呼叫路由 =================
 @app.before_request
 def before_request_hook():
-    # CORS 預檢請求不列入限流計算，直接放行交給 CORS 處理
     if request.method == 'OPTIONS':
         return
     if request.path.startswith('/api/stock') or request.path.startswith('/api/monthly'):
@@ -837,10 +816,30 @@ def generate_etag(stock_id, updated_at, limit):
 
 @app.route('/api/health', methods=['GET'])
 def api_health():
+    import sys
+    db_ok = False
+    db_err = "Not Configured"
+    if supabase:
+        try:
+            supabase.table("stocks").select("stock_id").limit(1).execute()
+            db_ok = True
+            db_err = ""
+        except Exception as e:
+            db_err = type(e).__name__
     return jsonify({
         "ok": True,
         "calcVersion": CALC_VERSION,
-        "time": get_iso_now()
+        "time": get_iso_now(),
+        "python_version": sys.version,
+        "env_vars": {
+            "FINMIND_TOKEN": bool(FINMIND_TOKEN),
+            "SUPABASE_URL": bool(SUPABASE_URL),
+            "SUPABASE_SERVICE_KEY": bool(SUPABASE_KEY),
+            "ALLOWED_ORIGINS": bool(ALLOWED_ORIGINS),
+            "ADMIN_KEY": bool(ADMIN_KEY)
+        },
+        "supabase_connected": db_ok,
+        "supabase_error": db_err
     })
 
 @app.route('/api/stock/<stock_id>', methods=['GET'])
@@ -936,8 +935,13 @@ def api_get_stocks_batch():
     errors = {}
     full_fetch_count = 0
     now = time.time()
+    start_time = time.time()
     
     for sid in stock_ids:
+        if time.time() - start_time > 45:
+            errors[sid] = "伺服器處理時間不足，請分批查詢"
+            continue
+
         cache_key = f"{sid}_v{CALC_VERSION}"
         if not refresh_mode and cache_key in memory_cache and (now - memory_cache[cache_key]['time'] < 300):
             cached = memory_cache[cache_key]['data']
@@ -1093,8 +1097,8 @@ def admin_recompute_all():
                     "complete": not new_res.get("latestQuarterPartial"),
                     "checked_at": now_str, "updated_at": now_str
                 }).execute()
-            except Exception as e:
-                print(f"[{sid}] admin_recompute_all 寫入失敗: {e}")
+            except Exception:
+                pass
             
             if "TaiwanStockMonthRevenue" in raw_dict:
                 m_res = compute_monthly_from_raw(sid, raw_dict)
@@ -1125,6 +1129,5 @@ def api_admin_stats():
 
 if __name__ == '__main__':
     is_debug = os.getenv("FLASK_DEBUG", "False").lower() == "true"
-    # 強制綁定 0.0.0.0，讓外部或跨域連線不會被本機網路層阻擋
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=is_debug)

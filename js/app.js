@@ -53,7 +53,22 @@ async function addStock() {
   try {
     // 已經在清單中的股票，加上 ?refresh=1 強制更新
     const endpoint = isUpdating ? `${API_BASE}/api/stock/${id}?refresh=1` : `${API_BASE}/api/stock/${id}`;
-    const response = await fetch(endpoint);
+
+  // 修改為以下加強版：
+  let response;
+  try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 秒等待喚醒
+      response = await fetch(endpoint, { signal: controller.signal });
+      clearTimeout(timeoutId);
+  } catch (err) {
+      if (err.name === 'AbortError') {
+          alert('請求逾時：雲端伺服器可能正在喚醒中，請再點擊一次新增！');
+      } else {
+          alert('無法連線到 Python 伺服器！請確認後端網址是否正確且支援 HTTPS。');
+      }
+      return;
+  }
     const result = await response.json();
     
     if (!response.ok) { 
