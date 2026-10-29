@@ -1,7 +1,6 @@
-// 智慧判斷本機環境，加入 file: 協定保護，解決雙擊 HTML 無法連線的問題
 const API_BASE = (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost' || window.location.protocol === 'file:')
     ? 'http://127.0.0.1:5000'
-    : 'https://ethan-stock-api.onrender.com';
+    : 'https://financial-statement-xou2.onrender.com';
 
 let portfolio = JSON.parse(localStorage.getItem('stock_portfolio') || '[]');
 let currentCharts = {};
