@@ -90,6 +90,10 @@ def handle_exception(e):
     traceback.print_exc()
     return jsonify({"error": f"伺服器發生非預期錯誤，請查看終端機日誌。({type(e).__name__})"}), 500
 
+@app.route('/')
+def index():
+    return "Financial Statement API is running!", 200
+
 # ================= 輔助函式 =================
 def get_tw_now():
     return datetime.now(timezone.utc) + timedelta(hours=8)
@@ -122,6 +126,11 @@ def check_rate_limit(ip):
         history.append(now)
         request_history[ip] = history
         return True
+
+# === 新聞模組：必須放在 check_rate_limit 定義之後 ===
+from news import register_news
+register_news(app, supabase=supabase, check_rate_limit=check_rate_limit, admin_key_env="ADMIN_KEY")
+# ===================================================
 
 def record_stats(source, finmind_calls, is_full=False):
     with global_lock:
@@ -214,8 +223,8 @@ def fetch_finmind_data(dataset, stock_id, start_date=START_DATE):
 def get_raw_from_db(stock_id):
     if not supabase: return {}
     try:
-        res = supabase.table("finmind_raw").select("dataset, raw_data").eq("stock_id", stock_id).execute()
-        return {r["dataset"]: r["raw_data"] for r in res.data}
+        res = supabase.table("raw_finmind").select("dataset, payload").eq("stock_id", stock_id).execute()
+        return {r["dataset"]: r["payload"] for r in res.data}
     except Exception as e:
         print(f"[{stock_id}] finmind_raw 讀取失敗: {e}")
         return None
@@ -223,8 +232,8 @@ def get_raw_from_db(stock_id):
 def upsert_raw_to_db(stock_id, dataset, data):
     if not supabase or not data: return
     try:
-        supabase.table("finmind_raw").upsert({
-            "stock_id": stock_id, "dataset": dataset, "raw_data": data, "updated_at": get_iso_now()
+        supabase.table("raw_finmind").upsert({
+            "stock_id": stock_id, "dataset": dataset, "payload": data, "fetched_at": get_iso_now()
         }).execute()
     except Exception as e:
         print(f"[{stock_id}] finmind_raw 寫入失敗 ({dataset}): {e}")
@@ -422,9 +431,9 @@ def compute_financials_from_raw(stock_id, raw_dict):
         if "DEBT_RANGE" in q['qualityFlags']: warnings.append(f"{q['q']} 負債比異常(小於0或大於100)")
         if "MARGIN_RANGE" in q['qualityFlags']: warnings.append(f"{q['q']} 利潤率異常(超出±100%)")
         if "REV_NEGATIVE" in q['qualityFlags']: warnings.append(f"{q['q']} 營收小於等於0")
-        if "CF_JUMP" in q['qualityFlags']: warnings.append(f"{q['q']} 營業現金流單季絕對值暴增")
-        if "QUICK_GT_CURRENT" in q['qualityFlags']: warnings.append(f"{q['q']} 速動比不可能大於流動比")
-        if "QUICK_EQ_CURRENT" in q['qualityFlags']: warnings.append(f"{q['q']} 存貨過小導致速動與流動相同")
+        if "CF_JUMP" in q['qualityFlags']: warnings.append(f"{q['q']} 營業現金流單季絕對值暴增(可能累計相減異常)")
+        if "QUICK_GT_CURRENT" in q['qualityFlags']: warnings.append(f"{q['q']} 速動比率不可能大於流動比率(邏輯異常)")
+        if "QUICK_EQ_CURRENT" in q['qualityFlags']: warnings.append(f"{q['q']} 存貨大於0但速動比率四捨五入後等於流動比率(可能存貨過小)")
 
     latestQuarterPartial = bool(quarters_data[-1]["missing"]) if quarters_data else False
     latestCompleteQuarter = next((q["q"] for q in reversed(quarters_data) if not q["missing"]), None)

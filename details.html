@@ -74,6 +74,41 @@
         <div id="detail-alerts-summary" style="margin-top: 12px; font-size: 0.9rem;"></div>
       </div>
 
+      <!-- ================= 相關新聞區塊 (搬移至此) ================= -->
+      <div class="card" id="news-card" style="margin-bottom: 16px;">
+        <div class="flex-between" style="margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+          <h3 style="margin: 0;">📰 相關新聞</h3>
+          <span id="news-updated-time" style="font-size: 0.85rem; color: var(--text-light);"></span>
+        </div>
+        
+        <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 16px;">
+          <div id="news-stats" style="display: flex; gap: 8px;">
+            <!-- 統計 Badge 將由 JS 產生 -->
+          </div>
+          <div id="news-filters" style="display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto;">
+            <button class="news-filter-btn active" onclick="setNewsFilter('all')">全部</button>
+            <button class="news-filter-btn" onclick="setNewsFilter('positive')">利多</button>
+            <button class="news-filter-btn" onclick="setNewsFilter('negative')">利空</button>
+            <button class="news-filter-btn" onclick="setNewsFilter('neutral')">中立</button>
+          </div>
+        </div>
+
+        <div id="news-messages" style="margin-bottom: 12px; font-size: 0.85rem; color: var(--yellow);"></div>
+        
+        <div id="news-list" style="display: flex; flex-direction: column; gap: 12px;">
+           <p style="color:var(--text-light); text-align:center;">新聞載入中…</p>
+        </div>
+        
+        <div id="news-more-container" style="margin-top: 16px; text-align: center; display: none;">
+           <button id="news-more-btn" class="btn-outline" style="min-height: 40px; width: 100%; max-width: 300px;" onclick="toggleNewsExpand()">顯示更多</button>
+        </div>
+        
+        <div style="margin-top: 20px; padding-top: 12px; border-top: 1px dashed var(--border); font-size: 0.8rem; color: var(--text-light); text-align: center;">
+          利多／利空為標題關鍵字自動判斷，僅供參考，不代表實際影響，也不構成投資建議。
+        </div>
+      </div>
+      <!-- ================= 新聞區塊結束 ================= -->
+
       <!-- 健康度雷達圖 -->
       <div class="card" id="radar-card" style="margin-bottom: 16px;">
         <h3 style="margin-bottom: 16px;">健康度雷達圖</h3>

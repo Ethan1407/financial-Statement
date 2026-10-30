@@ -87,3 +87,16 @@ th { background-color: rgba(0,0,0,0.02); color: var(--text-light); font-weight: 
 .chart-container { position: relative; height: 300px; width: 100%; margin-bottom: 24px; }
 .empty-state { text-align: center; padding: 40px; color: var(--text-light); }
 .alert-item { padding: 12px; border-left: 4px solid transparent; margin-bottom: 8px; background-color: var(--card-bg); cursor: pointer; transition: 0.2s; border-radius: 0 4px 4px 0; border: 1px solid var
+
+  /* 新聞區塊標籤與篩選按鈕樣式 */
+.badge.green { background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
+.badge.gray { background: rgba(156, 163, 175, 0.2); color: #9ca3af; border: 1px solid rgba(156, 163, 175, 0.3); }
+[data-theme="light"] .badge.green { background: rgba(16, 185, 129, 0.1); color: #059669; }
+[data-theme="light"] .badge.gray { background: rgba(156, 163, 175, 0.1); color: #4b5563; }
+
+.news-filter-btn {
+  padding: 4px 12px; border: 1px solid var(--border); background: transparent; 
+  color: var(--text-light); border-radius: 4px; cursor: pointer; 
+  min-height: 40px; font-size: 0.9rem; transition: 0.2s;
+}
+.news-filter-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }

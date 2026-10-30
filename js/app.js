@@ -2,8 +2,14 @@ const API_BASE = (window.location.hostname === '127.0.0.1' || window.location.ho
     ? 'http://127.0.0.1:5000'
     : 'https://financial-statement-xou2.onrender.com';
 
+// ====== 正確的全域變數宣告 (絕不重複) ======
 let portfolio = JSON.parse(localStorage.getItem('stock_portfolio') || '[]');
 let currentCharts = {};
+let newsController = null;
+let currentNewsData = null;
+let currentNewsFilter = 'all';
+let newsExpanded = false;
+// ==========================================
 
 document.addEventListener('DOMContentLoaded', () => {
   const savedTheme = localStorage.getItem('app_theme') || 'dark';
@@ -41,71 +47,64 @@ async function addStock() {
   let stockDatabase = JSON.parse(localStorage.getItem('stock_database') || '{}');
   let isUpdating = portfolio.includes(id);
 
-  // 記錄舊資料的最新季，用來比對更新結果
   const oldQuarter = (isUpdating && stockDatabase[id]) ? stockDatabase[id].latestQuarter : null;
-
   const originalText = btn.innerText;
-  // 依照狀態顯示不同按鈕文字
   btn.innerText = isUpdating ? '檢查更新中...' : '爬取中...'; 
   btn.disabled = true;
 
   try {
-    // 已經在清單中的股票，加上 ?refresh=1 強制更新
-    const endpoint = isUpdating ? `${API_BASE}/api/stock/${id}?refresh=1` : `${API_BASE}/api/stock/${id}`;
+      const endpoint = isUpdating ? `${API_BASE}/api/stock/${id}?refresh=1` : `${API_BASE}/api/stock/${id}`;
 
-  // 修改為以下加強版：
-  let response;
-  try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 秒等待喚醒
-      response = await fetch(endpoint, { signal: controller.signal });
-      clearTimeout(timeoutId);
-  } catch (err) {
-      if (err.name === 'AbortError') {
-          alert('請求逾時：雲端伺服器可能正在喚醒中，請再點擊一次新增！');
-      } else {
-          alert('無法連線到 Python 伺服器！請確認後端網址是否正確且支援 HTTPS。');
+      let response;
+      try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 秒等待喚醒
+          response = await fetch(endpoint, { signal: controller.signal });
+          clearTimeout(timeoutId);
+      } catch (err) {
+          if (err.name === 'AbortError') {
+              alert('請求逾時：雲端伺服器可能正在喚醒中，請再點擊一次新增！');
+          } else {
+              alert('無法連線到 Python 伺服器！請確認後端網址是否正確且支援 HTTPS。');
+          }
+          return;
       }
-      return;
-  }
-    const result = await response.json();
-    
-    if (!response.ok) { 
-        alert(result.error || '爬取失敗，請確認代號正確'); 
-        return; 
-    }
+      
+      const result = await response.json();
+      
+      if (!response.ok) { 
+          alert(result.error || '爬取失敗，請確認代號正確'); 
+          return; 
+      }
 
-    stockDatabase[id] = result;
-    localStorage.setItem('stock_database', JSON.stringify(stockDatabase));
+      stockDatabase[id] = result;
+      localStorage.setItem('stock_database', JSON.stringify(stockDatabase));
 
-    const newQuarter = result.latestQuarter;
+      const newQuarter = result.latestQuarter;
 
-    if (!isUpdating) { 
-        portfolio.push(id); 
-        savePortfolio(); 
-    } else {
-        // 智慧比對新舊資料並顯示對應提示
-        if (oldQuarter && newQuarter === oldQuarter) {
-            alert(`✅ ${id} 目前的財報已是最新版 (${newQuarter})，尚無新財報公布。`);
-        } else if (oldQuarter && newQuarter > oldQuarter) {
-            alert(`🎉 ${id} 更新成功！已為您抓取最新一季財報 (${newQuarter})。`);
-        } else {
-            alert(`✅ ${id} 資料同步完成！`);
-        }
-    }
-    
-    renderPortfolio();
-    if (typeof updateDetailSelect === 'function') updateDetailSelect();
-
-    // 背景觸發月營收更新 (不阻擋主流程)
-    fetch(`${API_BASE}/api/monthly/${id}?refresh=1`).catch(e => console.log('月營收更新略過'));
+      if (!isUpdating) { 
+          portfolio.push(id); 
+          savePortfolio(); 
+      } else {
+          if (oldQuarter && newQuarter === oldQuarter) {
+              alert(`✅ ${id} 目前的財報已是最新版 (${newQuarter})，尚無新財報公布。`);
+          } else if (oldQuarter && newQuarter > oldQuarter) {
+              alert(`🎉 ${id} 更新成功！已為您抓取最新一季財報 (${newQuarter})。`);
+          } else {
+              alert(`✅ ${id} 資料同步完成！`);
+          }
+      }
+      
+      renderPortfolio();
+      if (typeof updateDetailSelect === 'function') updateDetailSelect();
+      fetch(`${API_BASE}/api/monthly/${id}?refresh=1`).catch(e => console.log('月營收更新略過'));
 
   } catch (err) {
-    alert('無法連線到 Python 伺服器！請確認您已開啟 Python 後端，或伺服器正在重新啟動中。');
+      alert('無法連線到 Python 伺服器！請確認您已開啟 Python 後端，或伺服器正在重新啟動中。');
   } finally {
-    btn.innerText = originalText; 
-    btn.disabled = false; 
-    input.value = '';
+      btn.innerText = originalText; 
+      btn.disabled = false; 
+      input.value = '';
   }
 }
 
@@ -145,7 +144,6 @@ function renderPortfolio() {
     const typeLabel = TYPE_PROFILES[item.effectiveType] ? TYPE_PROFILES[item.effectiveType].label : '一般';
     const isFin = item.effectiveType === 'financial';
     
-    // 使用 == null 相容舊資料
     const fmt = (val, inapp, suf) => {
         if(isFin && inapp) return '不適用';
         if(val == null) return '—';
@@ -333,9 +331,6 @@ function switchDetailTab(tabId) {
   if(targetTab) targetTab.classList.add('active');
 }
 
-// ==========================================
-// QoQ 本季 vs 上季 比較模組
-// ==========================================
 function generateQoQ(quarters, isFin) {
     if (quarters.length < 2) return '<p style="color:var(--text-light); font-size:0.9rem;">資料不足以比較</p>';
     const cur = quarters[quarters.length-1];
@@ -360,7 +355,6 @@ function generateQoQ(quarters, isFin) {
     let results = [];
     metrics.forEach(m => {
         if (isFin && ['grossMargin', 'currentRatio', 'quickRatio', 'arDays', 'invDays', 'interestCoverage', 'freeCF'].includes(m.key)) return;
-        // 防呆，若有一季缺資料則跳過
         if (cur[m.key] == null || prev[m.key] == null) return;
         
         let diff = 0;
@@ -479,8 +473,10 @@ function loadDetailView(stockId) {
     if (tbodyCashflow) tbodyCashflow.innerHTML += `<tr><td>${q.q}</td><td>${fmt(q.operatingCF)}</td><td>${fmt(q.financingCF)}</td><td>${fmt(q.freeCF, true)}</td><td>${fmt(q.cashEnd)}</td></tr>`;
   });
 
-  // 確保 DOM 渲染完再繪製圖表
   setTimeout(() => renderCharts(stockId, analysis.alerts), 0);
+  
+  // 觸發載入新聞區塊
+  loadNews(stockId);
 }
 
 function renderCharts(stockId, alerts = []) {
@@ -492,7 +488,6 @@ function renderCharts(stockId, alerts = []) {
   const textColor = style.getPropertyValue('--text').trim() || '#e5e7eb';
   const gridColor = style.getPropertyValue('--border').trim() || '#374151';
   
-  // ==================== 1. 防呆保護雷達圖 ====================
   const radarContainer = document.getElementById('radar-container');
   const radarMsg = document.getElementById('radar-financial-msg');
   const scoreList = document.getElementById('radar-score-list');
@@ -563,8 +558,6 @@ function renderCharts(stockId, alerts = []) {
       }
   }
 
-  // ==================== 2. 防呆保護一般圖表 ====================
-  // 加入 spanGaps: false 確保沒有資料的地方會留空斷線
   const commonOptions = {
     responsive: true, maintainAspectRatio: false, spanGaps: false,
     scales: { x: { ticks: { color: textColor }, grid: { color: gridColor } }, y: { ticks: { color: textColor }, grid: { color: gridColor } } },
@@ -581,7 +574,7 @@ function renderCharts(stockId, alerts = []) {
 
   const createChart = (canvasId, type, datasets, yAxisOptions = {}) => {
     const canvas = document.getElementById(canvasId);
-    if (!canvas) return; // 沒抓到 HTML 容器就安全跳過，避免當機
+    if (!canvas) return; 
     if (currentCharts[canvasId]) currentCharts[canvasId].destroy();
     const ctx = canvas.getContext('2d');
     const opts = JSON.parse(JSON.stringify(commonOptions));
@@ -614,4 +607,185 @@ function renderCharts(stockId, alerts = []) {
   createChart('chart-risk', 'line', [
     { label: '歷史風險分數 (最高 100)', data: analysis.histRiskScores, borderColor: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.1)', fill: true, tension: 0.3 }
   ], { y: { min: 0, max: 100 } });
+}
+
+// ==========================================
+// 📰 個股新聞模組
+// ==========================================
+async function loadNews(stockId) {
+    const listContainer = document.getElementById('news-list');
+    const msgContainer = document.getElementById('news-messages');
+    const statsContainer = document.getElementById('news-stats');
+    const moreContainer = document.getElementById('news-more-container');
+    if (!listContainer) return;
+
+    if (newsController) newsController.abort();
+    newsController = new AbortController();
+
+    currentNewsData = null;
+    currentNewsFilter = 'all';
+    newsExpanded = false;
+    listContainer.innerHTML = '<p style="color:var(--text-light); text-align:center;">新聞載入中…</p>';
+    msgContainer.innerHTML = '';
+    statsContainer.innerHTML = '';
+    moreContainer.style.display = 'none';
+    document.querySelectorAll('.news-filter-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector('.news-filter-btn[onclick="setNewsFilter(\'all\')"]').classList.add('active');
+    document.getElementById('news-updated-time').textContent = '';
+
+    try {
+        const response = await fetch(`${API_BASE}/api/news/${stockId}`, { signal: newsController.signal });
+        if (!response.ok) throw new Error('API 回傳失敗');
+        const data = await response.json();
+        
+        currentNewsData = data;
+        renderNews();
+    } catch (err) {
+        if (err.name === 'AbortError') return;
+        listContainer.innerHTML = `
+            <div style="text-align:center; color:var(--text-light);">
+                <p style="margin-bottom: 12px;">新聞暫時無法取得</p>
+                <button class="btn-outline" onclick="loadNews('${stockId}')" style="min-height:40px; padding: 0 24px;">重試</button>
+            </div>
+        `;
+    }
+}
+
+function getRelativeTime(isoStr) {
+    const dt = new Date(isoStr);
+    const diffMs = Date.now() - dt.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 60) return `${Math.max(1, diffMins)} 分鐘前`;
+    const diffHrs = Math.floor(diffMins / 60);
+    if (diffHrs < 24) return `${diffHrs} 小時前`;
+    const diffDays = Math.floor(diffHrs / 24);
+    return `${diffDays} 天前`;
+}
+
+function setNewsFilter(filterType) {
+    if (currentNewsFilter === filterType) return;
+    currentNewsFilter = filterType;
+    newsExpanded = false;
+    
+    document.querySelectorAll('.news-filter-btn').forEach(b => {
+        b.classList.toggle('active', b.getAttribute('onclick').includes(`'${filterType}'`));
+    });
+    renderNews();
+}
+
+function toggleNewsExpand() {
+    newsExpanded = !newsExpanded;
+    renderNews();
+}
+
+function renderNews() {
+    const listContainer = document.getElementById('news-list');
+    const msgContainer = document.getElementById('news-messages');
+    const statsContainer = document.getElementById('news-stats');
+    const moreContainer = document.getElementById('news-more-container');
+    const moreBtn = document.getElementById('news-more-btn');
+    if (!currentNewsData || !listContainer) return;
+
+    if (currentNewsData.fetchedAt) {
+        const d = new Date(currentNewsData.fetchedAt);
+        const timeStr = d.toLocaleString('zh-TW', { 
+            timeZone: 'Asia/Taipei', 
+            year: 'numeric', 
+            month: '2-digit', 
+            day: '2-digit', 
+            hour: '2-digit', 
+            minute: '2-digit', 
+            hour12: false 
+        });
+        document.getElementById('news-updated-time').textContent = `更新於 ${timeStr}`;
+    }
+    
+    statsContainer.innerHTML = `
+        <span class="badge green">利多 ${currentNewsData.counts.positive || 0}</span>
+        <span class="badge red">利空 ${currentNewsData.counts.negative || 0}</span>
+        <span class="badge gray">中立 ${currentNewsData.counts.neutral || 0}</span>
+    `;
+
+    let msgs = [];
+    if (currentNewsData.insufficient) msgs.push("找到的新聞少於 10 則，僅顯示現有結果");
+    if (currentNewsData.stale) msgs.push("目前顯示的是舊資料");
+    msgContainer.textContent = msgs.length > 0 ? msgs.join(' · ') : '';
+
+    let items = currentNewsData.items || [];
+    if (currentNewsFilter !== 'all') {
+        items = items.filter(item => item.sentiment === currentNewsFilter);
+    }
+
+    listContainer.innerHTML = '';
+    
+    if (items.length === 0) {
+        listContainer.innerHTML = '<p style="color:var(--text-light); text-align:center; padding: 16px 0;">近期沒有找到相關新聞</p>';
+        moreContainer.style.display = 'none';
+        return;
+    }
+
+    const maxVisible = 5;
+    const isOverLimit = items.length > maxVisible;
+    const displayItems = (isOverLimit && !newsExpanded) ? items.slice(0, maxVisible) : items;
+
+    displayItems.forEach(item => {
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'display: flex; gap: 12px; align-items: flex-start; padding-bottom: 12px; border-bottom: 1px solid var(--border);';
+
+        const dot = document.createElement('div');
+        dot.style.cssText = 'width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 6px;';
+        if (item.sentiment === 'positive') dot.style.backgroundColor = '#10b981';
+        else if (item.sentiment === 'negative') dot.style.backgroundColor = '#ef4444';
+        else dot.style.backgroundColor = '#9ca3af';
+
+        const content = document.createElement('div');
+        content.style.cssText = 'flex: 1; min-width: 0;';
+
+        const titleDiv = document.createElement('div');
+        titleDiv.style.cssText = 'font-size: 1rem; margin-bottom: 6px; line-height: 1.4;';
+        
+        const urlStr = item.url || ""; 
+        if (/^https?:\/\//i.test(urlStr)) {
+            const a = document.createElement('a');
+            a.textContent = item.title;
+            a.href = urlStr;
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            a.style.color = 'inherit';
+            a.style.textDecoration = 'none';
+            a.onmouseover = () => a.style.color = 'var(--primary)';
+            a.onmouseout = () => a.style.color = 'inherit';
+            titleDiv.appendChild(a);
+        } else {
+            titleDiv.textContent = item.title;
+        }
+
+        const metaDiv = document.createElement('div');
+        metaDiv.style.cssText = 'font-size: 0.8rem; color: var(--text-light); line-height: 1.4;';
+        
+        const metaParts = [];
+        if (item.source) metaParts.push(item.source);
+        if (item.publishedAt) metaParts.push(getRelativeTime(item.publishedAt));
+        if (item.hits && item.hits.length > 0) metaParts.push(`依據：${item.hits.join('、')}`);
+        
+        metaDiv.textContent = metaParts.join(' · ');
+
+        content.appendChild(titleDiv);
+        content.appendChild(metaDiv);
+        wrapper.appendChild(dot);
+        wrapper.appendChild(content);
+        listContainer.appendChild(wrapper);
+    });
+
+    if (isOverLimit) {
+        moreContainer.style.display = 'block';
+        if (newsExpanded) {
+            moreBtn.textContent = '收合';
+        } else {
+            const hiddenCount = items.length - maxVisible;
+            moreBtn.textContent = `顯示更多（還有 ${hiddenCount} 則）`;
+        }
+    } else {
+        moreContainer.style.display = 'none';
+    }
 }
