@@ -1,7 +1,6 @@
 import os
 import re
 import requests
-import json
 import time
 import sys
 import traceback
@@ -9,10 +8,19 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request, make_response
 from flask_cors import CORS
-from supabase import create_client, Client
+from supabase import create_client
 from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from common import get_iso_now, safe_parse_iso, is_admin_request, TTLCache, LockRegistry
+
+# Windows 繁中終端機預設 cp950，無法輸出 emoji，統一改用 UTF-8 避免啟動時崩潰
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # ================= 載入環境變數 =================
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -46,20 +54,44 @@ else:
 CALC_VERSION = 4
 START_DATE = "2019-01-01"
 
-request_history = {}
+# 個股代號；00 開頭為 ETF，沒有財報，改由 /api/etf 處理
+STOCK_ID_RE = re.compile(r"^(?!00)[0-9]{4,6}$")
+
+# 一般使用者按「更新」時，同一檔股票在此秒數內只會向 FinMind 檢查一次
+MANUAL_CHECK_INTERVAL = 600
+
 RATE_LIMIT = 30
 RATE_WINDOW = 60
-
-memory_cache = {}
-monthly_memory_cache = {}
-finmind_backoff = {}
-stock_locks = {}
-global_lock = threading.Lock()
+RATE_LIMITED_PREFIXES = ('/api/stock', '/api/monthly', '/api/news', '/api/etf')
 
 try:
-    FULL_FETCH_DAILY_CAP = int(os.getenv("FULL_FETCH_DAILY_CAP", 40))
+    TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", 1))
 except (TypeError, ValueError):
-    FULL_FETCH_DAILY_CAP = 40
+    TRUSTED_PROXY_COUNT = 1
+
+request_history = TTLCache(ttl=RATE_WINDOW, maxsize=10000)
+memory_cache = TTLCache(ttl=300)
+monthly_memory_cache = TTLCache(ttl=300)
+finmind_backoff = TTLCache(ttl=600)
+industry_map_cache = TTLCache(ttl=86400, maxsize=1)
+industry_map_lock = threading.Lock()
+INDUSTRY_MAP_MAX_AGE = 7 * 86400
+
+# 資料庫容量管理：資料超過上限的 85% 時，從最久沒更新的股票開始刪除，降到 75%
+try:
+    STORAGE_LIMIT_MB = int(os.getenv("SUPABASE_STORAGE_LIMIT_MB", 500))  # Supabase 免費方案資料庫上限
+except (TypeError, ValueError):
+    STORAGE_LIMIT_MB = 500
+STORAGE_MAX_RATIO, STORAGE_TARGET_RATIO = 0.85, 0.75
+storage_check_cache = TTLCache(ttl=600, maxsize=1)  # 每 10 分鐘最多檢查一次
+stock_locks = LockRegistry()
+global_lock = threading.Lock()
+
+# 每日新股票完整抓取上限（每檔 4 次 FinMind API；免費帳號每小時 600 次）
+try:
+    FULL_FETCH_DAILY_CAP = int(os.getenv("FULL_FETCH_DAILY_CAP", 300))
+except (TypeError, ValueError):
+    FULL_FETCH_DAILY_CAP = 300
 
 daily_fetches = 0
 last_reset_date = ""
@@ -74,6 +106,9 @@ stats = {
 }
 
 app = Flask(__name__)
+# 只信任反向代理（如 Render）附加的 X-Forwarded-For，使用者自填的值無法偽造 remote_addr
+if TRUSTED_PROXY_COUNT > 0:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=TRUSTED_PROXY_COUNT)
 if ALLOWED_ORIGINS and ALLOWED_ORIGINS != "*":
     origins_list = [o.strip() for o in ALLOWED_ORIGINS.split(',') if o.strip()]
     CORS(app, origins=origins_list)
@@ -98,39 +133,17 @@ def index():
 def get_tw_now():
     return datetime.now(timezone.utc) + timedelta(hours=8)
 
-def get_iso_now():
-    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
-
-def safe_parse_iso(date_str):
-    """安全解析 Supabase ISO 時間字串，相容 Py 3.10 以下環境"""
-    if not date_str:
-        return datetime.min.replace(tzinfo=timezone.utc)
-    s = str(date_str).replace('Z', '+00:00')
-    s = re.sub(r'(\.\d{6})\d+', r'\1', s)
-    try:
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except Exception:
-        return datetime.min.replace(tzinfo=timezone.utc)
-
 def check_rate_limit(ip):
     now = time.time()
     with global_lock:
-        history = request_history.get(ip, [])
-        history = [t for t in history if now - t < RATE_WINDOW]
+        history = [t for t in (request_history.get(ip) or []) if now - t < RATE_WINDOW]
         if len(history) >= RATE_LIMIT:
-            request_history[ip] = history
+            request_history.set(ip, history)
             return False
         history.append(now)
-        request_history[ip] = history
+        request_history.set(ip, history)
         return True
 
-# === 新聞模組：必須放在 check_rate_limit 定義之後 ===
-from news import register_news
-register_news(app, supabase=supabase, check_rate_limit=check_rate_limit, admin_key_env="ADMIN_KEY")
-# ===================================================
 
 def record_stats(source, finmind_calls, is_full=False):
     with global_lock:
@@ -178,28 +191,27 @@ def get_monthly_check_ttl():
     return 6 * 3600 if tw_now.day <= 12 else 2 * 86400
 
 def get_stock_lock(stock_id):
-    with global_lock:
-        if stock_id not in stock_locks:
-            stock_locks[stock_id] = threading.Lock()
-        return stock_locks[stock_id]
+    return stock_locks.get(stock_id)
 
-def fetch_finmind_data(dataset, stock_id, start_date=START_DATE):
+def fetch_finmind_data(dataset, stock_id=None, start_date=START_DATE):
+    """stock_id 為 None 時抓全市場資料"""
     if not FINMIND_TOKEN:
         print(f"[{stock_id}] {dataset} 請求失敗: Token 未設定")
         return None, "TOKEN_MISSING"
 
-    backoff_time = finmind_backoff.get(stock_id)
-    if backoff_time and time.time() - backoff_time < 600:
+    if finmind_backoff.get(stock_id):
         return None, "BACKOFF"
 
     url = "https://api.finmindtrade.com/api/v4/data"
-    payload = {"dataset": dataset, "data_id": stock_id, "start_date": start_date, "token": FINMIND_TOKEN}
+    payload = {"dataset": dataset, "start_date": start_date, "token": FINMIND_TOKEN}
+    if stock_id:
+        payload["data_id"] = stock_id
     try:
         resp = requests.get(url, params=payload, timeout=15)
         if resp.status_code != 200:
             print(f"[{stock_id}] FinMind HTTP 錯誤: {resp.status_code} - {resp.text}")
             if resp.status_code == 429:
-                finmind_backoff[stock_id] = time.time()
+                finmind_backoff.set(stock_id, True)
                 return None, "RATE_LIMITED"
             return None, f"HTTP_{resp.status_code}"
         
@@ -208,7 +220,7 @@ def fetch_finmind_data(dataset, stock_id, start_date=START_DATE):
             msg = resp_json.get("msg", "unknown")
             print(f"[{stock_id}] FinMind API 錯誤: {msg}")
             # 只有明確被限制時才 backoff
-            if "limit" in msg.lower(): finmind_backoff[stock_id] = time.time()
+            if "limit" in msg.lower(): finmind_backoff.set(stock_id, True)
             return None, f"API_ERROR: {msg}"
             
         data = resp_json.get("data", [])
@@ -220,6 +232,53 @@ def fetch_finmind_data(dataset, stock_id, start_date=START_DATE):
         print(f"[{stock_id}] 網路例外: {str(e)}")
         return None, "NETWORK_ERROR"
 
+def get_industry_map():
+    """全市場 {stock_id: [產業別...]}，一次 API 取得；存在 raw_finmind (stock_id='ALL')，每 7 天更新"""
+    with industry_map_lock:
+        cached = industry_map_cache.get("map")
+        if cached is not None:
+            return cached
+
+        industry_map, fetched_at = {}, None
+        if supabase:
+            try:
+                res = supabase.table("raw_finmind").select("payload, fetched_at").eq("stock_id", "ALL").eq("dataset", "TaiwanStockInfo").execute()
+                if res.data:
+                    industry_map, fetched_at = res.data[0]["payload"] or {}, res.data[0]["fetched_at"]
+            except Exception as e:
+                print(f"[ALL] 產業別讀取失敗: {e}")
+
+        if not industry_map or (datetime.now(timezone.utc) - safe_parse_iso(fetched_at)).total_seconds() > INDUSTRY_MAP_MAX_AGE:
+            data, err = fetch_finmind_data("TaiwanStockInfo")
+            if data:
+                fresh = {}
+                for row in data:
+                    ind = row.get("industry_category")
+                    if ind and ind not in fresh.setdefault(row["stock_id"], []):
+                        fresh[row["stock_id"]].append(ind)
+                industry_map = fresh
+                upsert_raw_to_db("ALL", "TaiwanStockInfo", industry_map)
+            elif err:
+                print(f"[ALL] 產業別更新失敗 ({err})，沿用舊資料")
+
+        industry_map_cache.set("map", industry_map)
+        return industry_map
+
+def get_holding_details(stock_ids):
+    """ETF 成分股補充資料：產業別，以及已存在 Supabase 的財報（最近 8 季，供前端計算風險）"""
+    industry_map = get_industry_map()
+    stored = {}
+    if supabase and stock_ids:
+        try:
+            res = supabase.table("stock_results").select("stock_id, result").in_("stock_id", stock_ids).execute()
+            for row in res.data:
+                result = row["result"]
+                result["quarters"] = (result.get("quarters") or [])[-8:]
+                stored[row["stock_id"]] = result
+        except Exception as e:
+            print(f"[ETF] 成分股財報讀取失敗: {e}")
+    return {sid: {"industries": industry_map.get(sid, []), "financials": stored.get(sid)} for sid in stock_ids}
+
 def get_raw_from_db(stock_id):
     if not supabase: return {}
     try:
@@ -228,6 +287,10 @@ def get_raw_from_db(stock_id):
     except Exception as e:
         print(f"[{stock_id}] finmind_raw 讀取失敗: {e}")
         return None
+
+def is_raw_incomplete(raw_dict):
+    """缺公司基本資料或損益表原始資料時，視為不完整（增量更新無法補回歷史）"""
+    return not raw_dict.get("TaiwanStockInfo") or not raw_dict.get("TaiwanStockFinancialStatements")
 
 def upsert_raw_to_db(stock_id, dataset, data):
     if not supabase or not data: return
@@ -509,7 +572,7 @@ def compute_monthly_from_raw(stock_id, raw_dict):
     return { "latestMonth": latest_month, "months": monthly_data, "_latest_date": latest_date }
 
 # ================= 核心流 =================
-def process_financials(stock_id, force_refresh=False, allow_full=True):
+def process_financials(stock_id, refresh_mode=False, allow_full=True):
     with get_stock_lock(stock_id):
         db_res = None
         db_error = False
@@ -525,13 +588,18 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
             return None, "資料庫連線異常，暫不提供服務", 502
 
         if db_res:
+            # 季數過少時先確認原始資料是否缺漏（例如只剩最新一季），缺漏就完整重抓
+            if len(db_res.get("result", {}).get("quarters") or []) < 4:
+                raw_check = get_raw_from_db(stock_id)
+                if raw_check is not None and is_raw_incomplete(raw_check) and allow_full and check_daily_cap():
+                    print(f"[{stock_id}] 原始資料不完整，改為完整重抓")
+                    return full_fetch_financials(stock_id)
+
             db_calc_v = db_res.get("calc_version", 0)
             db_checked_at = db_res.get("checked_at")
-            db_complete = db_res.get("complete", True)
-            db_updated_at = db_res.get("updated_at")
-            
-            if db_calc_v < CALC_VERSION:
-                raw_dict = get_raw_from_db(stock_id)
+
+            raw_dict = get_raw_from_db(stock_id) if db_calc_v < CALC_VERSION else None
+            if raw_dict:
                 new_res = compute_financials_from_raw(stock_id, raw_dict)
                 latest_inc_date = new_res.pop("_latest_income_date")
                 now_str = get_iso_now()
@@ -554,9 +622,10 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
             db_complete = db_res.get("complete", True)
             
             ttl = get_check_ttl(db_complete)
+            if refresh_mode == "check": ttl = min(ttl, MANUAL_CHECK_INTERVAL)
             dt_checked = safe_parse_iso(db_checked_at)
             
-            if (datetime.now(timezone.utc) - dt_checked).total_seconds() < ttl and not force_refresh:
+            if (datetime.now(timezone.utc) - dt_checked).total_seconds() < ttl and refresh_mode != "force":
                 result = db_res["result"]
                 result["meta"] = {"source": source, "finmindCalls": finmind_calls, "checkedAt": db_checked_at, "stale": False}
                 result["_updated_at"] = db_res.get("updated_at", get_iso_now())
@@ -576,6 +645,16 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
                 
             new_max_date = max([item.get("date", "") for item in probe_data]) if probe_data else START_DATE
             raw_dict = get_raw_from_db(stock_id)
+            if raw_dict is None:
+                res = db_res["result"]
+                res["meta"] = {"source": "db-stale", "finmindCalls": 1, "checkedAt": db_checked_at, "stale": True}
+                res["_updated_at"] = db_res.get("updated_at", get_iso_now())
+                record_stats("db-stale", 1)
+                return res, None, 200
+            # 增量合併的前提是歷史原始資料完整，缺漏時合併只會剩下最新一季
+            if is_raw_incomplete(raw_dict) and allow_full and check_daily_cap():
+                print(f"[{stock_id}] 原始資料不完整，改為完整重抓")
+                return full_fetch_financials(stock_id)
             old_income = raw_dict.get("TaiwanStockFinancialStatements", [])
             old_max_date = db_res.get("latest_income_date", START_DATE)
             
@@ -658,40 +737,65 @@ def process_financials(stock_id, force_refresh=False, allow_full=True):
                 
             if not check_daily_cap():
                 return None, "今日伺服器免費配額已滿，請明天再試", 429
-                
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                fs = {
-                    "TaiwanStockInfo": executor.submit(fetch_finmind_data, "TaiwanStockInfo", stock_id),
-                    "TaiwanStockFinancialStatements": executor.submit(fetch_finmind_data, "TaiwanStockFinancialStatements", stock_id),
-                    "TaiwanStockBalanceSheet": executor.submit(fetch_finmind_data, "TaiwanStockBalanceSheet", stock_id),
-                    "TaiwanStockCashFlowsStatement": executor.submit(fetch_finmind_data, "TaiwanStockCashFlowsStatement", stock_id)
-                }
-                raw_dict = {}
-                for ds, f in fs.items():
-                    data, err = f.result()
-                    if err and ds == "TaiwanStockFinancialStatements":
-                        return None, f"獲取新股票資料失敗 ({err})", 502
-                    raw_dict[ds] = data or []
-                    upsert_raw_to_db(stock_id, ds, data)
+            return full_fetch_financials(stock_id)
 
-            new_res = compute_financials_from_raw(stock_id, raw_dict)
-            latest_inc_date = new_res.pop("_latest_income_date")
-            now_str = get_iso_now()
-            
-            try:
-                supabase.table("stock_results").upsert({
-                    "stock_id": stock_id, "calc_version": CALC_VERSION, "result": new_res,
-                    "latest_income_date": latest_inc_date, "latest_quarter": new_res.get("latestCompleteQuarter"),
-                    "complete": not new_res.get("latestQuarterPartial"), "checked_at": now_str, "updated_at": now_str
-                }).execute()
-            except Exception: pass
-            
-            new_res["meta"] = {"source": "full", "finmindCalls": 4, "checkedAt": now_str, "stale": False}
-            new_res["_updated_at"] = now_str
-            record_stats("full", 4, is_full=True)
-            return new_res, None, 200
+def ensure_storage_capacity():
+    """新增股票前確認資料庫容量，不足時由 Supabase 函式淘汰最舊的股票資料"""
+    if not supabase or storage_check_cache.get("checked"):
+        return
+    storage_check_cache.set("checked", True)
+    limit = STORAGE_LIMIT_MB * 1024 * 1024
+    try:
+        res = supabase.rpc("ensure_storage_capacity", {
+            "max_bytes": int(limit * STORAGE_MAX_RATIO), "target_bytes": int(limit * STORAGE_TARGET_RATIO)
+        }).execute()
+    except Exception as e:
+        print(f"⚠️ 資料庫容量檢查失敗: {e}")
+        return
+    evicted = res.data or []
+    if evicted:
+        print(f"⚠️ 資料庫容量超過 {STORAGE_MAX_RATIO:.0%}，已刪除最久沒更新的 {len(evicted)} 檔: {', '.join(evicted)}")
+        for sid in evicted:
+            memory_cache.pop(f"{sid}_v{CALC_VERSION}")
+            monthly_memory_cache.pop(f"{sid}_monthly")
 
-def process_monthly(stock_id, force_refresh=False):
+def full_fetch_financials(stock_id):
+    """從 START_DATE 起完整抓取四個資料集並重算。呼叫端需持有 stock lock 並已通過 check_daily_cap。"""
+    ensure_storage_capacity()
+    # 先抓損益表確認有財報，查無資料（代號不存在）只花 1 次 API，也不寫入 DB
+    income_data, err = fetch_finmind_data("TaiwanStockFinancialStatements", stock_id)
+    if err:
+        return None, f"獲取新股票資料失敗 ({err})", 502
+    if not income_data:
+        return None, "查無此股票的財報資料", 404
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        fs = {ds: executor.submit(fetch_finmind_data, ds, stock_id)
+              for ds in ("TaiwanStockInfo", "TaiwanStockBalanceSheet", "TaiwanStockCashFlowsStatement")}
+        raw_dict = {ds: f.result()[0] or [] for ds, f in fs.items()}
+    raw_dict["TaiwanStockFinancialStatements"] = income_data
+
+    for ds, data in raw_dict.items():
+        upsert_raw_to_db(stock_id, ds, data)
+
+    new_res = compute_financials_from_raw(stock_id, raw_dict)
+    latest_inc_date = new_res.pop("_latest_income_date")
+    now_str = get_iso_now()
+
+    try:
+        supabase.table("stock_results").upsert({
+            "stock_id": stock_id, "calc_version": CALC_VERSION, "result": new_res,
+            "latest_income_date": latest_inc_date, "latest_quarter": new_res.get("latestCompleteQuarter"),
+            "complete": not new_res.get("latestQuarterPartial"), "checked_at": now_str, "updated_at": now_str
+        }).execute()
+    except Exception: pass
+
+    new_res["meta"] = {"source": "full", "finmindCalls": 4, "checkedAt": now_str, "stale": False}
+    new_res["_updated_at"] = now_str
+    record_stats("full", 4, is_full=True)
+    return new_res, None, 200
+
+def process_monthly(stock_id, refresh_mode=False):
     with get_stock_lock(stock_id):
         db_res = None
         db_error = False
@@ -708,9 +812,10 @@ def process_monthly(stock_id, force_refresh=False):
         if db_res:
             db_checked_at = db_res.get("checked_at")
             ttl = get_monthly_check_ttl()
+            if refresh_mode == "check": ttl = min(ttl, MANUAL_CHECK_INTERVAL)
             dt_checked = safe_parse_iso(db_checked_at)
             
-            if (datetime.now(timezone.utc) - dt_checked).total_seconds() < ttl and not force_refresh:
+            if (datetime.now(timezone.utc) - dt_checked).total_seconds() < ttl and refresh_mode != "force":
                 result = db_res["result"]
                 result["meta"] = {"source": "db", "finmindCalls": 0, "checkedAt": db_checked_at, "stale": False}
                 result["_updated_at"] = db_res.get("updated_at", get_iso_now())
@@ -729,6 +834,16 @@ def process_monthly(stock_id, force_refresh=False):
                 
             new_max_date = max([item.get("date", "") for item in probe_data]) if probe_data else START_DATE
             raw_dict = get_raw_from_db(stock_id)
+            if raw_dict is None:
+                res = db_res["result"]
+                res["meta"] = {"source": "db-stale", "finmindCalls": 1, "checkedAt": db_checked_at, "stale": True}
+                res["_updated_at"] = db_res.get("updated_at", get_iso_now())
+                record_stats("db-stale", 1)
+                return res, None, 200
+            # 沒有歷史月營收原始資料時，增量合併只會剩最新幾個月，改走完整重抓
+            if not raw_dict.get("TaiwanStockMonthRevenue") and check_daily_cap():
+                print(f"[{stock_id}] 月營收原始資料不存在，改為完整重抓")
+                return full_fetch_monthly(stock_id)
             old_revenue = raw_dict.get("TaiwanStockMonthRevenue", [])
             old_max_date = db_res.get("latest_date", START_DATE)
             
@@ -781,56 +896,61 @@ def process_monthly(stock_id, force_refresh=False):
         else:
             if not check_daily_cap():
                 return None, "今日伺服器免費配額已滿，請明天再試", 429
-                
-            probe_data, err = fetch_finmind_data("TaiwanStockMonthRevenue", stock_id)
-            if err:
-                return None, f"獲取新股票資料失敗 ({err})", 502
-                
-            raw_dict = {"TaiwanStockMonthRevenue": probe_data}
-            upsert_raw_to_db(stock_id, "TaiwanStockMonthRevenue", probe_data)
+            return full_fetch_monthly(stock_id)
 
-            new_res = compute_monthly_from_raw(stock_id, raw_dict)
-            latest_date = new_res.pop("_latest_date")
-            now_str = get_iso_now()
-            
-            try:
-                supabase.table("monthly_results").upsert({
-                    "stock_id": stock_id, "result": new_res,
-                    "latest_date": latest_date, "checked_at": now_str, "updated_at": now_str
-                }).execute()
-            except Exception: pass
-            
-            new_res["fetchedAt"] = now_str
-            new_res["meta"] = {"source": "full", "finmindCalls": 1, "checkedAt": now_str, "stale": False}
-            new_res["_updated_at"] = now_str
-            record_stats("full", 1)
-            return new_res, None, 200
+def full_fetch_monthly(stock_id):
+    """從 START_DATE 起完整抓取月營收並重算。呼叫端需持有 stock lock 並已通過 check_daily_cap。"""
+    probe_data, err = fetch_finmind_data("TaiwanStockMonthRevenue", stock_id)
+    if err:
+        return None, f"獲取新股票資料失敗 ({err})", 502
+    if not probe_data:
+        return None, "查無此股票的月營收資料", 404
+
+    raw_dict = {"TaiwanStockMonthRevenue": probe_data}
+    upsert_raw_to_db(stock_id, "TaiwanStockMonthRevenue", probe_data)
+
+    new_res = compute_monthly_from_raw(stock_id, raw_dict)
+    latest_date = new_res.pop("_latest_date")
+    now_str = get_iso_now()
+
+    try:
+        supabase.table("monthly_results").upsert({
+            "stock_id": stock_id, "result": new_res,
+            "latest_date": latest_date, "checked_at": now_str, "updated_at": now_str
+        }).execute()
+    except Exception: pass
+
+    new_res["fetchedAt"] = now_str
+    new_res["meta"] = {"source": "full", "finmindCalls": 1, "checkedAt": now_str, "stale": False}
+    new_res["_updated_at"] = now_str
+    record_stats("full", 1)
+    return new_res, None, 200
 
 # ================= 網頁呼叫路由 =================
 @app.before_request
 def before_request_hook():
     if request.method == 'OPTIONS':
         return
-    if request.path.startswith('/api/stock') or request.path.startswith('/api/monthly'):
-        client_ip = request.headers.get('X-Forwarded-For', request.remote_addr)
-        if client_ip:
-            client_ip = client_ip.split(',')[0].strip()
-        else:
-            client_ip = "unknown"
-        if not check_rate_limit(client_ip):
+    if request.path.startswith(RATE_LIMITED_PREFIXES):
+        if not check_rate_limit(request.remote_addr or "unknown"):
             return jsonify({"error": "請求過於頻繁，請稍後再試"}), 429
+
+def get_refresh_mode():
+    """?refresh=1：管理員為強制更新 (force)；一般使用者為手動檢查 (check)，受 MANUAL_CHECK_INTERVAL 限制"""
+    if request.args.get('refresh') not in ('1', 'full'):
+        return False
+    return "force" if is_admin_request() else "check"
 
 def generate_etag(stock_id, updated_at, limit):
     return f'W/"{stock_id}-v{CALC_VERSION}-{updated_at}-{limit}"'
 
 @app.route('/api/health', methods=['GET'])
 def api_health():
-    import sys
     db_ok = False
     db_err = "Not Configured"
     if supabase:
         try:
-            supabase.table("stocks").select("stock_id").limit(1).execute()
+            supabase.table("stock_results").select("stock_id").limit(1).execute()
             db_ok = True
             db_err = ""
         except Exception as e:
@@ -853,7 +973,7 @@ def api_health():
 
 @app.route('/api/stock/<stock_id>', methods=['GET'])
 def api_get_stock(stock_id):
-    if not re.match(r"^[0-9]{4,6}$", stock_id):
+    if not STOCK_ID_RE.match(stock_id):
         return jsonify({"error": "股票代號格式錯誤"}), 400
     try:
         limit = int(request.args.get('limit', 8))
@@ -861,33 +981,25 @@ def api_get_stock(stock_id):
     except:
         limit = 8
 
-    req_refresh = request.args.get('refresh')
-    refresh_mode = False
-    if req_refresh in ['1', 'full']:
-        admin_key = request.headers.get('X-Admin-Key')
-        if admin_key and admin_key == os.getenv('ADMIN_KEY'):
-            refresh_mode = req_refresh
+    refresh_mode = get_refresh_mode()
 
     cache_key = f"{stock_id}_v{CALC_VERSION}"
-    now = time.time()
-    
-    if not refresh_mode:
-        if cache_key in memory_cache and (now - memory_cache[cache_key]['time'] < 300):
-            cached = memory_cache[cache_key]['data']
-            etag = generate_etag(stock_id, cached.get('_updated_at', ''), limit)
-            if request.headers.get('If-None-Match') == etag:
-                resp = make_response('', 304)
-                resp.headers['ETag'] = etag
-                return resp
-            res_copy = dict(cached)
-            res_copy.pop("_updated_at", None)
-            res_copy['quarters'] = res_copy['quarters'][-limit:] if limit < len(res_copy['quarters']) else res_copy['quarters']
-            record_stats("mem-cache", 0)
-            print(f"[{stock_id}] meta.source: mem-cache | finmindCalls: 0")
-            response = make_response(jsonify(res_copy))
-            response.headers['ETag'] = etag
-            response.headers['Cache-Control'] = 'no-cache'
-            return response
+    cached = None if refresh_mode else memory_cache.get(cache_key)
+    if cached:
+        etag = generate_etag(stock_id, cached.get('_updated_at', ''), limit)
+        if request.headers.get('If-None-Match') == etag:
+            resp = make_response('', 304)
+            resp.headers['ETag'] = etag
+            return resp
+        res_copy = dict(cached)
+        res_copy.pop("_updated_at", None)
+        res_copy['quarters'] = res_copy['quarters'][-limit:] if limit < len(res_copy['quarters']) else res_copy['quarters']
+        record_stats("mem-cache", 0)
+        print(f"[{stock_id}] meta.source: mem-cache | finmindCalls: 0")
+        response = make_response(jsonify(res_copy))
+        response.headers['ETag'] = etag
+        response.headers['Cache-Control'] = 'no-cache'
+        return response
 
     result, err_msg, status_code = process_financials(stock_id, refresh_mode)
     if err_msg:
@@ -898,7 +1010,7 @@ def api_get_stock(stock_id):
     updated_at = result.get("_updated_at", "")
     etag = generate_etag(stock_id, updated_at, limit)
     
-    memory_cache[cache_key] = {'time': now, 'data': result}
+    memory_cache.set(cache_key, result)
     
     if request.headers.get('If-None-Match') == etag:
         resp = make_response('', 304)
@@ -924,7 +1036,7 @@ def api_get_stocks_batch():
         return jsonify({"error": "每次最多只能查詢 20 檔股票"}), 400
         
     for sid in stock_ids:
-        if not re.match(r"^[0-9]{4,6}$", sid):
+        if not STOCK_ID_RE.match(sid):
             return jsonify({"error": f"股票代號 {sid} 格式錯誤"}), 400
 
     try:
@@ -933,17 +1045,11 @@ def api_get_stocks_batch():
     except:
         limit = 8
         
-    req_refresh = request.args.get('refresh')
-    refresh_mode = False
-    if req_refresh in ['1', 'full']:
-        admin_key = request.headers.get('X-Admin-Key')
-        if admin_key and admin_key == os.getenv('ADMIN_KEY'):
-            refresh_mode = req_refresh
+    refresh_mode = get_refresh_mode()
 
     results = {}
     errors = {}
     full_fetch_count = 0
-    now = time.time()
     start_time = time.time()
     
     for sid in stock_ids:
@@ -952,8 +1058,8 @@ def api_get_stocks_batch():
             continue
 
         cache_key = f"{sid}_v{CALC_VERSION}"
-        if not refresh_mode and cache_key in memory_cache and (now - memory_cache[cache_key]['time'] < 300):
-            cached = memory_cache[cache_key]['data']
+        cached = None if refresh_mode else memory_cache.get(cache_key)
+        if cached:
             res_copy = dict(cached)
             res_copy.pop("_updated_at", None)
             res_copy['quarters'] = res_copy['quarters'][-limit:] if limit < len(res_copy['quarters']) else res_copy['quarters']
@@ -973,11 +1079,11 @@ def api_get_stocks_batch():
                     full_fetch_count += 1
             except: pass
             
-        res, err, status = process_financials(sid, force_refresh=refresh_mode, allow_full=allow_full)
+        res, err, status = process_financials(sid, refresh_mode=refresh_mode, allow_full=allow_full)
         if err:
             errors[sid] = err
         else:
-            memory_cache[cache_key] = {'time': now, 'data': res}
+            memory_cache.set(cache_key, res)
             print(f"[{sid}] batch meta.source: {res.get('meta', {}).get('source')} | finmindCalls: {res.get('meta', {}).get('finmindCalls', 0)}")
             res_copy = dict(res)
             res_copy.pop("_updated_at", None)
@@ -988,7 +1094,7 @@ def api_get_stocks_batch():
 
 @app.route('/api/monthly/<stock_id>', methods=['GET'])
 def api_get_monthly(stock_id):
-    if not re.match(r"^[0-9]{4,6}$", stock_id):
+    if not STOCK_ID_RE.match(stock_id):
         return jsonify({"error": "股票代號格式錯誤"}), 400
     try:
         limit = int(request.args.get('months', 24))
@@ -996,32 +1102,25 @@ def api_get_monthly(stock_id):
     except:
         limit = 24
 
-    req_refresh = request.args.get('refresh')
-    refresh_mode = False
-    if req_refresh in ['1', 'full']:
-        admin_key = request.headers.get('X-Admin-Key')
-        if admin_key and admin_key == os.getenv('ADMIN_KEY'):
-            refresh_mode = req_refresh
+    refresh_mode = get_refresh_mode()
 
     cache_key = f"{stock_id}_monthly"
-    now = time.time()
-    if not refresh_mode:
-        if cache_key in monthly_memory_cache and (now - monthly_memory_cache[cache_key]['time'] < 300):
-            cached = monthly_memory_cache[cache_key]['data']
-            etag = generate_etag(stock_id, cached.get('_updated_at', ''), limit)
-            if request.headers.get('If-None-Match') == etag:
-                resp = make_response('', 304)
-                resp.headers['ETag'] = etag
-                return resp
-            res_copy = dict(cached)
-            res_copy.pop("_updated_at", None)
-            res_copy['months'] = res_copy['months'][-limit:] if limit < len(res_copy['months']) else res_copy['months']
-            record_stats("mem-cache", 0)
-            print(f"[{stock_id}] monthly meta.source: mem-cache | finmindCalls: 0")
-            response = make_response(jsonify(res_copy))
-            response.headers['ETag'] = etag
-            response.headers['Cache-Control'] = 'no-cache'
-            return response
+    cached = None if refresh_mode else monthly_memory_cache.get(cache_key)
+    if cached:
+        etag = generate_etag(stock_id, cached.get('_updated_at', ''), limit)
+        if request.headers.get('If-None-Match') == etag:
+            resp = make_response('', 304)
+            resp.headers['ETag'] = etag
+            return resp
+        res_copy = dict(cached)
+        res_copy.pop("_updated_at", None)
+        res_copy['months'] = res_copy['months'][-limit:] if limit < len(res_copy['months']) else res_copy['months']
+        record_stats("mem-cache", 0)
+        print(f"[{stock_id}] monthly meta.source: mem-cache | finmindCalls: 0")
+        response = make_response(jsonify(res_copy))
+        response.headers['ETag'] = etag
+        response.headers['Cache-Control'] = 'no-cache'
+        return response
 
     result, err_msg, status_code = process_monthly(stock_id, refresh_mode)
     if err_msg:
@@ -1032,7 +1131,7 @@ def api_get_monthly(stock_id):
     updated_at = result.get("_updated_at", "")
     etag = generate_etag(stock_id, updated_at, limit)
     
-    monthly_memory_cache[cache_key] = {'time': now, 'data': result}
+    monthly_memory_cache.set(cache_key, result)
     
     if request.headers.get('If-None-Match') == etag:
         resp = make_response('', 304)
@@ -1050,7 +1149,7 @@ def api_get_monthly(stock_id):
 # ================= 管理路由 =================
 @app.route('/api/admin/recompute/<stock_id>', methods=['POST'])
 def admin_recompute(stock_id):
-    if request.headers.get('X-Admin-Key') != os.getenv('ADMIN_KEY'):
+    if not is_admin_request():
         return jsonify({"error": "權限不足"}), 403
     raw_dict = get_raw_from_db(stock_id)
     if not raw_dict:
@@ -1085,10 +1184,10 @@ def admin_recompute(stock_id):
 
 @app.route('/api/admin/recompute-all', methods=['POST'])
 def admin_recompute_all():
-    if request.headers.get('X-Admin-Key') != os.getenv('ADMIN_KEY'):
+    if not is_admin_request():
         return jsonify({"error": "權限不足"}), 403
     try:
-        res = supabase.table("stocks").select("stock_id").execute()
+        res = supabase.table("stock_results").select("stock_id").execute()
         stocks = [r["stock_id"] for r in res.data]
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1124,7 +1223,7 @@ def admin_recompute_all():
 
 @app.route('/api/admin/clear-cache', methods=['POST'])
 def admin_clear_cache():
-    if request.headers.get('X-Admin-Key') != os.getenv('ADMIN_KEY'):
+    if not is_admin_request():
         return jsonify({"error": "權限不足"}), 403
     memory_cache.clear()
     monthly_memory_cache.clear()
@@ -1132,9 +1231,21 @@ def admin_clear_cache():
 
 @app.route('/api/admin/stats', methods=['GET'])
 def api_admin_stats():
-    if request.headers.get('X-Admin-Key') != os.getenv('ADMIN_KEY'):
+    if not is_admin_request():
         return jsonify({"error": "權限不足"}), 403
-    return jsonify(stats)
+    storage = None
+    if supabase:
+        try:
+            used = supabase.rpc("storage_used_bytes").execute().data
+            storage = {"usedMB": round(used / 1048576, 1), "limitMB": STORAGE_LIMIT_MB, "ratio": round(used / (STORAGE_LIMIT_MB * 1048576), 3)}
+        except Exception as e:
+            storage = {"error": type(e).__name__}
+    return jsonify({**stats, "storage": storage})
+
+from news import register_news
+from etf import register_etf
+register_news(app, supabase=supabase)
+register_etf(app, supabase=supabase, get_holding_details=get_holding_details)
 
 if __name__ == '__main__':
     is_debug = os.getenv("FLASK_DEBUG", "False").lower() == "true"

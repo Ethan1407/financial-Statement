@@ -12,7 +12,7 @@
     <div class="nav-container">
       <div class="logo">📈 財報健檢儀表板</div>
       <nav class="nav-links">
-        <a href="index.html">我的自選股</a>
+        <a href="index.html">已查詢股票</a>
         <a href="alerts.html">警訊總覽</a>
         <a href="details.html">個股詳情</a>
         <a href="rules.html">規則與說明</a>
@@ -23,30 +23,43 @@
   <main>
     <div class="card flex-between" style="flex-wrap: wrap; gap: 12px;">
       <div>
-        <!-- 修改 1：將 placeholder 範例改為 2330 -->
-        <input type="text" id="stock-input" placeholder="輸入股票代號 (例: 2330)" maxlength="4" onkeypress="if(event.key==='Enter') addStock()">
-        <button class="btn-primary" onclick="addStock()">新增</button>
+        <input type="text" id="stock-input" placeholder="輸入股票或 ETF 代號 (例: 2330、0050)" maxlength="6" onkeypress="if(event.key==='Enter') addStock()">
+        <button class="btn-primary" onclick="addStock()">加入自選股</button>
       </div>
       <div>
-        <!-- 修改 2：將「依股票代號排序」放在第一順位，並加上 selected 設為預設值 -->
-        <select id="sort-select" onchange="renderPortfolio()">
+        <select id="sort-select" onchange="renderStockOverview()">
           <option value="id" selected>依股票代號排序</option>
           <option value="severity">依燈號嚴重程度排序</option>
         </select>
       </div>
     </div>
-    
-    <div id="portfolio-grid" class="grid-3"></div>
-    
-    <div id="portfolio-empty" class="empty-state" style="display:none;">
-      <h3>尚無追蹤股票</h3>
-      <!-- 提示文字的範例也一併改為真實股票 -->
-      <p>請在上方輸入股票代號開始追蹤 (例: 2330, 2317, 2887)</p>
-    </div>
+
+    <section id="tracked-section">
+      <h2 class="section-title">
+        ⭐ 自選股 <span class="section-count" id="tracked-count"></span>
+        <button class="section-toggle" id="tracked-toggle" onclick="toggleSection('tracked')" aria-expanded="true" title="展開／收合">▼</button>
+      </h2>
+      <div id="tracked-body">
+        <div id="tracked-grid" class="grid-3"></div>
+        <p id="tracked-empty" class="empty-state" style="display:none;"></p>
+      </div>
+    </section>
+
+    <section id="others-section" style="display:none;">
+      <h2 class="section-title">
+        📄 其他已查詢股票 <span class="section-count" id="others-count"></span>
+        <button class="section-toggle" id="others-toggle" onclick="toggleSection('others')" aria-expanded="true" title="展開／收合">▼</button>
+      </h2>
+      <div id="others-body">
+        <p class="section-hint">曾查詢過、但未加入自選股的公司與 ETF（例如從 ETF 成分股點入，或移出自選股）。</p>
+        <div id="others-grid" class="grid-3"></div>
+      </div>
+    </section>
   </main>
-  
+
   <script src="js/rules.js"></script>
   <script src="js/app.js"></script>
-  <script> initPortfolio(); </script>
+  <script src="js/etf.js"></script>
+  <script> renderStockOverview(); </script>
 </body>
 </html>

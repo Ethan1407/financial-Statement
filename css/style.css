@@ -50,6 +50,14 @@ main { max-width: 1200px; margin: 24px auto; padding: 0 20px; min-height: 80vh; 
 .flex-between { display: flex; justify-content: space-between; align-items: center; }
 .grid-3 { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; margin-top: 16px; }
 
+.section-title { font-size: 1.2rem; margin: 24px 0 4px 0; }
+.section-count { font-size: 0.95rem; color: var(--text-light); font-weight: normal; }
+.section-toggle { background: transparent; color: var(--text-light); padding: 2px 8px; font-size: 0.85rem; vertical-align: middle; transition: transform 0.2s, color 0.2s; }
+.section-toggle:hover { color: var(--primary); }
+.section-toggle.collapsed { transform: rotate(-90deg); }
+.section-hint { color: var(--text-light); font-size: 0.9rem; }
+.card-updated { font-size: 0.8rem; color: var(--text-light); }
+
 /* ================= 標籤與燈號 ================= */
 .badge { 
   padding: 4px 8px; 
@@ -86,9 +94,11 @@ th { background-color: rgba(0,0,0,0.02); color: var(--text-light); font-weight: 
 /* ================= 警訊與圖表 ================= */
 .chart-container { position: relative; height: 300px; width: 100%; margin-bottom: 24px; }
 .empty-state { text-align: center; padding: 40px; color: var(--text-light); }
-.alert-item { padding: 12px; border-left: 4px solid transparent; margin-bottom: 8px; background-color: var(--card-bg); cursor: pointer; transition: 0.2s; border-radius: 0 4px 4px 0; border: 1px solid var
+.alert-item { padding: 12px; border: 1px solid var(--border); border-left: 4px solid transparent; margin-bottom: 8px; background-color: var(--card-bg); cursor: pointer; transition: 0.2s; border-radius: 0 4px 4px 0; }
+.alert-item.red { border-left-color: var(--red); }
+.alert-item.yellow { border-left-color: var(--yellow); }
 
-  /* 新聞區塊標籤與篩選按鈕樣式 */
+/* 新聞區塊標籤與篩選按鈕樣式 */
 .badge.green { background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
 .badge.gray { background: rgba(156, 163, 175, 0.2); color: #9ca3af; border: 1px solid rgba(156, 163, 175, 0.3); }
 [data-theme="light"] .badge.green { background: rgba(16, 185, 129, 0.1); color: #059669; }
@@ -100,3 +110,65 @@ th { background-color: rgba(0,0,0,0.02); color: var(--text-light); font-weight: 
   min-height: 40px; font-size: 0.9rem; transition: 0.2s;
 }
 .news-filter-btn.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+/* ================= ETF 專用樣式 ================= */
+.etf-holding-row {
+    display: grid;
+    grid-template-columns: 40px 60px 1fr 100px 90px;
+    gap: 8px;
+    align-items: center;
+    padding: 12px 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    min-height: 40px;
+    transition: background-color 0.2s;
+}
+.etf-holding-row:hover {
+    background-color: rgba(37, 99, 235, 0.05);
+}
+.etf-holding-bar-bg {
+    width: 100%;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    margin-top: 4px;
+    overflow: hidden;
+}
+.etf-stack-bar {
+    display: flex;
+    height: 14px;
+    border-radius: 7px;
+    overflow: hidden;
+    background: var(--border);
+}
+.etf-bar-row {
+    display: grid;
+    grid-template-columns: 150px 1fr 80px;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 6px;
+    font-size: 0.9rem;
+}
+.etf-holding-risk {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+.etf-holding-bar-fill {
+    height: 100%;
+    background: var(--primary);
+    border-radius: 3px;
+}
+@media (max-width: 480px) {
+    .etf-bar-row {
+        grid-template-columns: 96px 1fr 64px;
+        font-size: 0.85rem;
+    }
+    .etf-holding-row {
+        grid-template-columns: 26px 44px 1fr 64px 64px;
+        font-size: 0.9rem;
+    }
+}

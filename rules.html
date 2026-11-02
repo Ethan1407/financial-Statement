@@ -11,7 +11,7 @@
     <div class="nav-container">
       <div class="logo">📈 財報健檢儀表板</div>
       <nav class="nav-links">
-        <a href="index.html">我的自選股</a>
+        <a href="index.html">已查詢股票</a>
         <a href="alerts.html">警訊總覽</a>
         <a href="details.html">個股詳情</a>
         <a href="rules.html" class="active">規則與說明</a>
@@ -24,37 +24,40 @@
       <h2>系統基礎運作說明</h2>
       <p style="margin-top: 8px; color: var(--text-light); line-height: 1.6;">
         本系統資料來源為 FinMind API。判斷門檻會根據「公司產業類型」進行動態適配，以減少因為產業特性帶來的誤判。<br>
-        最後更新時間：<span id="info-date" style="color:var(--primary); font-weight:bold;"></span> (最新財報季：<span id="info-q" style="font-weight:bold;">--</span>)
+        自選股最後更新：<span id="info-date" style="color:var(--primary); font-weight:bold;"></span>（最新財報季：<span id="info-q" style="font-weight:bold;">--</span>）
+      </p>
+      <p style="margin-top: 8px; color: var(--text-light); line-height: 1.6; font-size: 0.9rem;">
+        警訊規則參考
+        <a href="https://www.fanruan.com/zh-tw/blog/financial-report-analysis-beginners" target="_blank" rel="noopener noreferrer">帆軟〈財報分析入門〉</a>與
+        <a href="https://pttstock.tw/financial-statements/" target="_blank" rel="noopener noreferrer">PTT Stock〈財報三表完全解析〉</a>。
+        兩篇都強調財務比率沒有跨產業通用的安全值，應比較連續多季趨勢與去年同期，因此多數規則以「連續季數」與「去年同季」判斷，
+        並依產業類型調整門檻。除「營業現金流低於稅後淨利」的 1 倍門檻出自文章外，其餘數字門檻為本系統的設定值。
       </p>
     </div>
 
-    <!-- 產業分類覆蓋規則表 -->
+    <!-- 基礎警訊門檻表 -->
     <div class="card" style="margin-bottom: 24px;">
-      <h3>🏢 產業類型檢驗差異</h3>
-      <p style="margin: 8px 0 16px 0; color: var(--text-light); font-size: 0.9rem;">不同類型的公司套用以下不同標準。您可以在「個股詳情」中手動為公司更改類型。</p>
-      <div class="table-responsive">
+      <h3>⚠️ 基礎警訊判斷標準（一般類型）</h3>
+      <div class="table-responsive" style="margin-top: 16px;">
         <table>
           <thead>
-            <tr><th style="width: 25%">公司類型</th><th>調整與覆蓋說明</th></tr>
+            <tr><th style="width: 15%">嚴重程度</th><th style="width: 12%">報表</th><th style="width: 22%">警訊名稱</th><th>具體判斷條件與門檻</th></tr>
           </thead>
-          <tbody id="type-table-body">
-            <!-- JS 動態生成 -->
-          </tbody>
+          <tbody id="rules-table-body"></tbody>
         </table>
       </div>
     </div>
 
-    <!-- 基礎警訊門檻表 -->
+    <!-- 產業類型調整表 -->
     <div class="card">
-      <h3>⚠️ 基礎警訊判斷標準 (一般類型)</h3>
-      <div class="table-responsive" style="margin-top: 16px;">
+      <h3>🏢 不同企業型態的判斷標準</h3>
+      <p style="margin: 8px 0 16px 0; color: var(--text-light); font-size: 0.9rem;">系統依產業自動判斷公司類型，套用下列調整；也可以在「個股詳情」中手動更改類型。</p>
+      <div class="table-responsive">
         <table>
           <thead>
-            <tr><th style="width: 15%">嚴重程度</th><th style="width: 25%">警訊名稱</th><th>具體判斷條件與門檻</th></tr>
+            <tr><th style="width: 18%">公司類型</th><th style="width: 32%">產業特性</th><th>相對一般類型的調整</th></tr>
           </thead>
-          <tbody id="rules-table-body">
-            <!-- JS 動態生成 -->
-          </tbody>
+          <tbody id="type-table-body"></tbody>
         </table>
       </div>
     </div>
@@ -63,50 +66,50 @@
   <script src="js/rules.js"></script>
   <script src="js/app.js"></script>
   <script>
+    const TAB_LABELS = { income: '損益表', balance: '資產負債表', cashflow: '現金流量表' };
+
+    function levelBadge(level) {
+      if (level === 'red') return '<span class="badge red">紅燈 (警戒)</span>';
+      if (level === 'dynamic') return '<span class="badge yellow">黃燈</span> <span class="badge red">紅燈</span>';
+      return '<span class="badge yellow">黃燈 (注意)</span>';
+    }
+
+    // 列出某類型相對一般類型的差異：停用的規則、改過的門檻與燈號
+    function describeOverrides(profile) {
+      const changes = Object.entries(profile.overrides).map(([key, override]) => {
+        const base = RULES_CONFIG[key];
+        if (override.disabled) return `<li><strong>${base.name}</strong>：不檢查</li>`;
+        const effective = { ...base, ...override };
+        const levelNote = override.level ? `（升為${override.level === 'red' ? '紅燈' : '黃燈'}）` : '';
+        return `<li><strong>${base.name}</strong>${levelNote}：${effective.why(effective)}</li>`;
+      });
+      return changes.length ? `<ul style="margin:0; padding-left:18px; line-height:1.7;">${changes.join('')}</ul>` : '使用標準門檻';
+    }
+
     function initRules() {
-      const stockDatabase = JSON.parse(localStorage.getItem('stock_database') || '{}');
+      const stockDatabase = loadStockDatabase();
       let latestTime = null;
       let latestQ = null;
-      
       portfolio.forEach(id => {
           const data = stockDatabase[id];
-          if(data && data.fetchedAt) {
-              if(!latestTime || new Date(data.fetchedAt) > new Date(latestTime)) latestTime = data.fetchedAt;
-          }
-          if(data && data.latestQuarter) {
-              if(!latestQ || data.latestQuarter > latestQ) latestQ = data.latestQuarter;
-          }
+          if (!data || data.isEtf) return;
+          const checkedAt = data.meta && data.meta.checkedAt;
+          if (checkedAt && (!latestTime || new Date(checkedAt) > new Date(latestTime))) latestTime = checkedAt;
+          if (data.latestCompleteQuarter && (!latestQ || data.latestCompleteQuarter > latestQ)) latestQ = data.latestCompleteQuarter;
       });
+      document.getElementById('info-date').textContent = latestTime ? formatDateTime(latestTime) : '尚未取得資料';
+      document.getElementById('info-q').textContent = latestQ || '--';
 
-      if (latestTime) {
-          const d = new Date(latestTime);
-          document.getElementById('info-date').innerText = d.toLocaleString('zh-TW');
-          document.getElementById('info-q').innerText = latestQ || "未知";
-      } else {
-          document.getElementById('info-date').innerText = "尚未取得資料";
-      }
+      document.getElementById('rules-table-body').innerHTML = Object.values(RULES_CONFIG).map(r =>
+          `<tr><td>${levelBadge(r.level)}</td><td>${TAB_LABELS[r.tab]}</td><td><strong>${r.name}</strong></td><td>${r.why(r)}</td></tr>`
+      ).join('');
 
-      const typeBody = document.getElementById('type-table-body');
-      typeBody.innerHTML = '';
-      for (const key in TYPE_PROFILES) {
-          const t = TYPE_PROFILES[key];
-          typeBody.innerHTML += `<tr><td><strong>${t.label}</strong></td><td>${t.desc}</td></tr>`;
-      }
-
-      const rulesBody = document.getElementById('rules-table-body');
-      rulesBody.innerHTML = '';
-      for (const key in RULES_CONFIG) {
-          const r = RULES_CONFIG[key];
-          const badgeClass = r.level === 'red' ? 'red' : 'yellow';
-          const badgeText = r.level === 'red' ? '紅燈 (警戒)' : '黃燈 (注意)';
-          const desc = typeof r.why === 'function' ? r.why(r) : r.why;
-          rulesBody.innerHTML += `<tr><td><span class="badge ${badgeClass}">${badgeText}</span></td><td><strong>${r.name}</strong></td><td>${desc}</td></tr>`;
-      }
+      document.getElementById('type-table-body').innerHTML = Object.values(TYPE_PROFILES).map(t =>
+          `<tr><td><strong>${t.label}</strong></td><td>${t.desc}</td><td>${describeOverrides(t)}</td></tr>`
+      ).join('');
     }
-    
-    document.addEventListener('DOMContentLoaded', () => {
-       initRules();
-    });
+
+    document.addEventListener('DOMContentLoaded', initRules);
   </script>
 </body>
 </html>

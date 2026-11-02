@@ -1,20 +1,17 @@
-import os
 import re
 import time
-import hmac
 import urllib.parse
-import threading
 import concurrent.futures
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 import requests
 from flask import Blueprint, request, jsonify
+from common import get_iso_now, safe_parse_iso, is_admin_request, TTLCache, LockRegistry
 
 # ================= 模組層級全域變數 =================
-news_memory_cache = {}
-news_locks = {}
-global_news_lock = threading.Lock()
+news_memory_cache = TTLCache(ttl=300)
+news_locks = LockRegistry()
 
 HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -30,17 +27,6 @@ NEGATION_RE = re.compile(r'(不|未|沒|無).{0,3}$')
 
 
 # ================= 輔助函式 =================
-def get_stock_news_lock(stock_id):
-    with global_news_lock:
-        if stock_id not in news_locks:
-            news_locks[stock_id] = threading.Lock()
-        return news_locks[stock_id]
-
-
-def get_iso_now():
-    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
-
-
 def split_title_source(raw_title):
     """Google News 標題格式為「標題 - 媒體」。只在『空白-空白』時才切，避免誤切「台積電-KY」。"""
     raw_title = (raw_title or "").strip()
@@ -230,21 +216,10 @@ def build_queries(company_name, stock_id):
     ], name
 
 
-def parse_ts(s):
-    try:
-        s = (s or "").replace("Z", "+00:00")
-        s = re.sub(r'(\.\d{6})\d+', r'\1', s)
-        d = datetime.fromisoformat(s)
-        if d.tzinfo is None:
-            d = d.replace(tzinfo=timezone.utc)
-        return d.timestamp()
-    except Exception:
-        return 0
-
 
 # ================= 核心邏輯 =================
 def process_news(stock_id, supabase, force_refresh):
-    with get_stock_news_lock(stock_id):
+    with news_locks.get(stock_id):
         now = time.time()
 
         db_cached, db_updated_at = None, 0
@@ -253,7 +228,7 @@ def process_news(stock_id, supabase, force_refresh):
                 res = supabase.table("stock_news").select("items, fetched_at").eq("stock_id", stock_id).execute()
                 if res.data:
                     db_cached = res.data[0].get("items")
-                    db_updated_at = parse_ts(res.data[0].get("fetched_at"))
+                    db_updated_at = safe_parse_iso(res.data[0].get("fetched_at")).timestamp()
             except Exception as e:
                 print(f"[{stock_id}] stock_news 讀取失敗: {e}")
 
@@ -323,47 +298,31 @@ def process_news(stock_id, supabase, force_refresh):
 
 
 # ================= 對外註冊介面 =================
-def register_news(app, supabase=None, check_rate_limit=None, admin_key_env="ADMIN_KEY"):
+def register_news(app, supabase=None):
     news_bp = Blueprint("news_bp", __name__)
-
-    def is_admin():
-        admin_key = os.getenv(admin_key_env, "")
-        req_key = request.headers.get("X-Admin-Key", "")
-        return bool(admin_key) and bool(req_key) and hmac.compare_digest(admin_key, req_key)
-
-    @news_bp.before_request
-    def limit_news_request():
-        if request.method == "OPTIONS" or not check_rate_limit:
-            return
-        client_ip = request.headers.get("X-Forwarded-For", request.remote_addr) or "unknown"
-        client_ip = client_ip.split(',')[0].strip()
-        if not check_rate_limit(client_ip):
-            return jsonify({"error": "請求過於頻繁，請稍後再試"}), 429
 
     @news_bp.route("/api/news/<stock_id>", methods=["GET"])
     def api_get_news(stock_id):
         if not re.match(r"^[0-9]{4,6}$", stock_id):
             return jsonify({"error": "股票代號格式錯誤"}), 400
 
-        force_refresh = (request.args.get("refresh") == "1") and is_admin()
+        force_refresh = (request.args.get("refresh") == "1") and is_admin_request()
 
-        cache_key = f"news_{stock_id}"
-        now = time.time()
-        cached = news_memory_cache.get(cache_key)
-        if not force_refresh and cached and now - cached["time"] < 300:
-            return jsonify(dict(cached["data"]))
+        cached = None if force_refresh else news_memory_cache.get(stock_id)
+        if cached:
+            return jsonify(cached)
 
         data, err = process_news(stock_id, supabase, force_refresh)
         if err:
             return jsonify({"error": err}), 502
         if data and data.get("items"):
-            news_memory_cache[cache_key] = {"time": now, "data": data}
+            news_memory_cache.set(stock_id, data)
         return jsonify(data)
 
     @news_bp.route("/api/news-debug/<stock_id>", methods=["GET"])
     def api_news_debug(stock_id):
         """管理員診斷：看 Google / Bing 各自的連線狀態（不會顯示任何金鑰）"""
-        if not is_admin():
+        if not is_admin_request():
             return jsonify({"error": "權限不足"}), 403
         if not re.match(r"^[0-9]{4,6}$", stock_id):
             return jsonify({"error": "股票代號格式錯誤"}), 400
