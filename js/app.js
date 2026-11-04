@@ -13,9 +13,10 @@ let currentNewsData = null;
 let currentNewsFilter = 'all';
 let newsExpanded = false;
 
+// 立即套用主題（不能等 DOMContentLoaded），否則 initDetails() 先畫的圖表會讀到 HTML 預設的深色變數
+document.documentElement.setAttribute('data-theme', localStorage.getItem('app_theme') || 'dark');
+
 document.addEventListener('DOMContentLoaded', () => {
-  const savedTheme = localStorage.getItem('app_theme') || 'dark';
-  document.documentElement.setAttribute('data-theme', savedTheme);
   setActiveNav();
   if (isFirstVisit) seedDefaultPortfolio();
 });
@@ -663,7 +664,10 @@ function renderCharts(stockId, alerts = []) {
   const style = getComputedStyle(document.body);
   const textColor = style.getPropertyValue('--text').trim() || '#e5e7eb';
   const gridColor = style.getPropertyValue('--border').trim() || '#374151';
-  
+  // 全域預設也跟著主題走，避免未指定顏色的軸（如右側 y1）沿用前一個主題的顏色
+  Chart.defaults.color = textColor;
+  Chart.defaults.borderColor = gridColor;
+
   const radarContainer = document.getElementById('radar-container');
   const radarMsg = document.getElementById('radar-financial-msg');
   const scoreList = document.getElementById('radar-score-list');
@@ -715,7 +719,6 @@ function renderCharts(stockId, alerts = []) {
 
           if(currentCharts['chart-radar']) currentCharts['chart-radar'].destroy();
           const ctxRadar = radarCanvas.getContext('2d');
-          Chart.defaults.color = textColor;
           currentCharts['chart-radar'] = new Chart(ctxRadar, {
               type: 'radar',
               data: {
@@ -754,7 +757,11 @@ function renderCharts(stockId, alerts = []) {
     if (currentCharts[canvasId]) currentCharts[canvasId].destroy();
     const ctx = canvas.getContext('2d');
     const opts = JSON.parse(JSON.stringify(commonOptions));
-    Object.assign(opts.scales, yAxisOptions);
+    // 合併軸設定時保留文字顏色，避免覆蓋掉 ticks 顏色
+    Object.entries(yAxisOptions).forEach(([axis, axisOpts]) => {
+      opts.scales[axis] = { ...(opts.scales[axis] || {}), ...axisOpts };
+      opts.scales[axis].ticks = { color: textColor, ...(axisOpts.ticks || {}) };
+    });
     currentCharts[canvasId] = new Chart(ctx, { type, data: { labels, datasets }, options: opts });
   };
 
