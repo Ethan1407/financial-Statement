@@ -385,7 +385,26 @@ function renderAlerts() {
     });
   }
 
-  if (!hasAnyAlert) empty.style.display = 'block'; else empty.style.display = 'none';
+  empty.style.display = hasAnyAlert ? 'none' : 'block';
+  if (!hasAnyAlert) empty.innerHTML = alertsEmptyMessage(mode);
+}
+
+// 沒有警訊時，區分「真的通過檢驗」與「根本沒有可檢驗的股票」，避免誤以為沒有風險
+function alertsEmptyMessage(mode) {
+  const checkedCount = portfolio.filter(id => analyzeStock(id)).length;
+  if (seedingDefaults) return '<p>正在載入預設自選股…</p>';
+  if (portfolio.length === 0) {
+    return `<p style="margin-bottom:12px;">尚未加入任何股票，因此沒有可檢驗的財報。</p>
+            <a href="index.html" class="btn-link-primary">前往新增股票</a>`;
+  }
+  if (checkedCount === 0) {
+    return `<p style="margin-bottom:12px;">自選股中沒有可檢驗財報的個股（ETF 不適用個股財報警訊，或資料尚未載入）。</p>
+            <a href="index.html" class="btn-link-primary">前往新增個股</a>`;
+  }
+  if (mode === 'red' || mode === 'yellow') {
+    return `<p>沒有符合篩選條件（${mode === 'red' ? '紅燈' : '黃燈'}）的警訊。</p>`;
+  }
+  return `<p>已檢驗自選股中的 ${checkedCount} 檔個股，皆未觸發警訊 🎉</p>`;
 }
 
 function initDetails() {
