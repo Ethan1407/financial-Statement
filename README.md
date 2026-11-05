@@ -1,0 +1,334 @@
+<div align="center">
+
+# 📈 台股財報健檢儀表板
+
+**輸入股票代號，自動檢查財報三表的警訊，並拆解 ETF 看出你真正持有哪些公司。**
+
+![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)
+![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)
+![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-3FCF8E?logo=supabase&logoColor=white)
+![Chart.js](https://img.shields.io/badge/Chart.js-4.4-FF6384?logo=chartdotjs&logoColor=white)
+![Vanilla JS](https://img.shields.io/badge/Frontend-Vanilla%20JS-F7DF1E?logo=javascript&logoColor=black)
+
+[功能特色](#-功能特色) ·
+[系統架構](#️-系統架構) ·
+[快速開始](#-快速開始) ·
+[API 文件](#-api-文件) ·
+[警訊規則](#-警訊規則)
+
+</div>
+
+> [!WARNING]
+> 本專案資料來自公開資訊（FinMind、證交所、櫃買中心、MoneyDJ），依財報數據自動計算，可能有延遲或誤差。所有內容僅供參考，**不構成投資建議**。
+
+<!-- 截圖：建議放在 docs/screenshots/ 後取消註解
+<p align="center">
+  <img src="docs/screenshots/overview.png" width="49%" alt="已查詢股票總覽">
+  <img src="docs/screenshots/details.png" width="49%" alt="個股詳情">
+</p>
+-->
+
+---
+
+## ✨ 功能特色
+
+| 頁面 | 說明 |
+| --- | --- |
+| **已查詢股票** `index.html` | 管理自選股，依代號或燈號嚴重程度排序；同時列出曾查詢但未加入自選的公司與 ETF。 |
+| **警訊總覽** `alerts.html` | 彙整所有自選股觸發的警訊，可依公司分組或依嚴重程度排序，並篩選紅燈／黃燈。 |
+| **個股詳情** `details.html` | 近 8 季風險分數趨勢、五維健康度雷達圖、損益表／財務狀況表／現金流量表明細，以及附利多／利空標記的相關新聞。 |
+| **投資組合健檢** `portfolio.html` | 把 ETF 拆解成底層成分股並與個股持倉加總，算出真實持股比例、產業曝險、ETF 成分重疊度與集中度（HHI）。 |
+| **規則與說明** `rules.html` | 列出所有警訊的判斷條件，以及各產業類型的門檻調整。 |
+
+### 重點設計
+
+- **19 條財報警訊規則**：涵蓋損益表、資產負債表、現金流量表，分為 🔴 紅燈（警戒）與 🟡 黃燈（注意）。
+- **依產業調整門檻**：依證交所產業別自動判斷公司類型（電子、景氣循環、成長、零售、營建、金融……），減少因產業特性造成的誤判；也可在個股詳情手動更改。
+- **ETF 透視**：投資組合可混合輸入個股與 ETF，以矩陣乘法 `vᵀ · W` 算出每家公司的真實曝險，找出不同 ETF 重壓同一批股票的情況。
+- **持股只存在本機**：自選股、投資組合與股數都存在瀏覽器 `localStorage`，不會上傳到伺服器。
+- **淺色／深色主題**切換。
+
+---
+
+## 🏗️ 系統架構
+
+```mermaid
+flowchart LR
+    subgraph Browser["瀏覽器（Vercel 靜態網站）"]
+        UI["HTML / CSS / Vanilla JS<br/>Chart.js"]
+        LS[("localStorage<br/>自選股・投資組合")]
+    end
+
+    subgraph API["Flask API（Render）"]
+        S["server.py<br/>財報・月營收"]
+        N["news.py<br/>新聞"]
+        E["etf.py<br/>ETF 成分股"]
+        Q["quotes.py<br/>收盤價"]
+        M[["記憶體 TTL 快取"]]
+    end
+
+    DB[("Supabase<br/>PostgreSQL")]
+
+    UI <--> LS
+    UI -- "REST / JSON" --> S & N & E & Q
+    S & N & E <--> DB
+    S & N & E & Q <--> M
+
+    S -- 財報・月營收・產業別 --> FM["FinMind API"]
+    N --> GN["Google News / Bing News RSS"]
+    E --> MD["MoneyDJ"]
+    Q --> TW["證交所 / 櫃買中心 OpenAPI"]
+```
+
+### 資料流與快取策略
+
+後端以三層快取減少外部 API 呼叫，盡量不超過 FinMind 免費帳號的額度（每小時 600 次）：
+
+1. **記憶體快取**（`common.TTLCache`）：財報與新聞 5 分鐘、ETF 10 分鐘、收盤價 30 分鐘。
+2. **Supabase**：保存 FinMind 原始資料（`raw_finmind`）與計算結果。若計算邏輯更新（`CALC_VERSION` 改變），可直接用原始資料重算，不必重新抓取。
+3. **增量更新**：已有資料的股票只抓最新的部分並合併；新股票才完整抓取，且每日有上限（`FULL_FETCH_DAILY_CAP`）。
+
+其他保護機制：
+
+- 每個 IP 每 60 秒最多 30 次 API 請求。
+- 同一檔股票以獨立的鎖（`LockRegistry`）避免同時重複抓取。
+- FinMind 失敗時暫停該資料集 10 分鐘，並回傳資料庫中的舊資料（標記為 `db-stale`）。
+- 資料庫用量超過上限的 85% 時，從最久沒更新的股票開始刪除，降到 75%。
+- 回應附 `ETag`，資料沒變時回傳 `304 Not Modified`。
+
+---
+
+## 🧰 技術棧
+
+| 層級 | 技術 |
+| --- | --- |
+| 前端 | HTML、CSS、Vanilla JavaScript、[Chart.js](https://www.chartjs.org/) |
+| 後端 | Python、Flask、Flask-CORS、Gunicorn |
+| 資料庫 | [Supabase](https://supabase.com/)（PostgreSQL） |
+| 資料來源 | [FinMind](https://finmindtrade.com/)、[證交所 OpenAPI](https://openapi.twse.com.tw/)、[櫃買中心 OpenAPI](https://www.tpex.org.tw/openapi/)、MoneyDJ、Google News／Bing News RSS |
+| 部署 | 前端 Vercel（含 Vercel Analytics），後端 Render |
+
+---
+
+## 📁 專案結構
+
+```text
+Financial Statements/
+├── server.py          # Flask 主程式：財報、月營收、管理員 API、限流與快取
+├── news.py            # 個股新聞（Google / Bing RSS）與利多／利空判斷
+├── etf.py             # ETF 成分股（MoneyDJ）
+├── quotes.py          # 上市櫃全市場收盤價（證交所、櫃買中心）
+├── common.py          # 共用工具：TTLCache、LockRegistry、管理員驗證、時間處理
+├── requirements.txt
+│
+├── index.html         # 已查詢股票
+├── alerts.html        # 警訊總覽
+├── details.html       # 個股詳情
+├── portfolio.html     # 投資組合健檢
+├── rules.html         # 規則與說明
+├── css/style.css
+└── js/
+    ├── app.js         # 共用邏輯：API 位址、自選股、主題、個股頁面
+    ├── rules.js       # 警訊規則、產業類型設定、健康度評分
+    ├── etf.js         # ETF 顯示與成分股
+    └── portfolio.js   # 投資組合透視計算
+```
+
+---
+
+## 🚀 快速開始
+
+### 環境需求
+
+- Python 3.10 以上
+- [FinMind API Token](https://finmindtrade.com/)（免費註冊）
+- [Supabase](https://supabase.com/) 專案（選用；未設定時以純記憶體模式運作，重啟後資料會消失）
+
+### 1. 下載專案並安裝套件
+
+```bash
+git clone https://github.com/Ethan1407/Financial-Statement.git
+cd Financial-Statement
+
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+### 2. 設定環境變數
+
+在專案根目錄建立 `.env`（已列在 `.gitignore`，不會被提交）：
+
+```env
+FINMIND_TOKEN=你的_FinMind_Token
+SUPABASE_URL=https://xxxx.supabase.co
+SUPABASE_SERVICE_KEY=你的_Supabase_service_role_key
+```
+
+<details>
+<summary>完整環境變數列表</summary>
+
+| 變數 | 必填 | 預設值 | 說明 |
+| --- | :---: | --- | --- |
+| `FINMIND_TOKEN` | ✅ | — | FinMind API 金鑰 |
+| `SUPABASE_URL` | | — | Supabase 專案網址；未設定則使用純記憶體模式 |
+| `SUPABASE_SERVICE_KEY` | | — | Supabase service role key（只放在後端） |
+| `ALLOWED_ORIGINS` | | 全部允許 | CORS 允許來源，以逗號分隔，例如 `https://your-site.vercel.app` |
+| `ADMIN_KEY` | | — | 管理員 API 金鑰，透過 `X-Admin-Key` 標頭傳送 |
+| `FULL_FETCH_DAILY_CAP` | | `300` | 每日新股票完整抓取上限 |
+| `SUPABASE_STORAGE_LIMIT_MB` | | `500` | 資料庫容量上限（Supabase 免費方案為 500 MB） |
+| `TRUSTED_PROXY_COUNT` | | `1` | 信任的反向代理層數，用於取得真實 IP |
+| `CHECK_TTL_OVERRIDE_SECONDS` | | — | 覆寫「多久向 FinMind 檢查一次新資料」，測試用 |
+| `FLASK_DEBUG` | | `False` | 開發模式 |
+| `PORT` | | `5000` | 後端埠號 |
+
+</details>
+
+### 3. 啟動後端
+
+```bash
+python server.py
+```
+
+看到 `=== 環境變數狀態 ===` 後，開啟 <http://127.0.0.1:5000/api/health> 確認狀態。
+
+### 4. 啟動前端
+
+前端是純靜態檔案，另開一個終端機：
+
+```bash
+python -m http.server 8080
+```
+
+開啟 <http://localhost:8080>。前端在 `localhost`、`127.0.0.1` 或 `file://` 下會自動連到 `http://127.0.0.1:5000`，其他網域則連到正式環境（見 [js/app.js](js/app.js) 的 `API_BASE`）。
+
+### Supabase 資料表
+
+後端會用到以下資料表（以 upsert 寫入，請將主鍵設為下表欄位）：
+
+| 資料表 | 主鍵 | 用途 |
+| --- | --- | --- |
+| `raw_finmind` | `stock_id`, `dataset` | FinMind 原始資料（`payload`, `fetched_at`） |
+| `stock_results` | `stock_id` | 財報計算結果（`result`, `calc_version`, `complete`, `latest_quarter`, `checked_at`, `updated_at`…） |
+| `monthly_results` | `stock_id` | 月營收計算結果 |
+| `stock_news` | `stock_id` | 新聞快取（`items`, `fetched_at`） |
+| `etf_holdings` | `etf_id` | ETF 成分股（`holdings`, `as_of`, `fetched_at`） |
+
+另需兩個 RPC 函式：`storage_used_bytes()` 回傳資料庫已用位元組數，`ensure_storage_capacity(max_bytes, target_bytes)` 在超過上限時刪除最舊的股票資料並回傳被刪除的代號。
+
+---
+
+## ☁️ 部署
+
+**後端（Render）**
+
+- Build Command：`pip install -r requirements.txt`
+- Start Command：`gunicorn server:app`
+- 在 Render 設定上述環境變數，並將 `ALLOWED_ORIGINS` 設為前端網址。
+
+**前端（Vercel）**
+
+- 以專案根目錄部署為靜態網站，不需建置指令。
+- 若後端網址不同，請修改 [js/app.js](js/app.js) 第 3 行的正式環境 API 位址。
+
+---
+
+## 📡 API 文件
+
+一般 API 每個 IP 每 60 秒最多 30 次請求。
+
+| 方法 | 路徑 | 說明 |
+| --- | --- | --- |
+| `GET` | `/api/health` | 服務狀態、環境變數是否設定、資料庫連線 |
+| `GET` | `/api/stock/<stock_id>` | 個股季度財報與指標。參數：`limit`（4–24 季，預設 8）、`refresh=1`（檢查新資料，同一檔每 10 分鐘一次） |
+| `GET` | `/api/stocks?ids=2330,2317` | 批次查詢，最多 20 檔 |
+| `GET` | `/api/monthly/<stock_id>` | 月營收 |
+| `GET` | `/api/news/<stock_id>` | 相關新聞，附利多／利空／中立標記 |
+| `GET` | `/api/etf/<etf_id>` | ETF 成分股與權重 |
+| `GET` | `/api/quotes?ids=0050,2330` | 最近收盤價與產業別，最多 60 檔 |
+
+<details>
+<summary>管理員 API（需 <code>X-Admin-Key</code> 標頭）</summary>
+
+| 方法 | 路徑 | 說明 |
+| --- | --- | --- |
+| `POST` | `/api/admin/recompute/<stock_id>` | 用資料庫中的原始資料重算單一股票 |
+| `POST` | `/api/admin/recompute-all` | 重算所有股票 |
+| `POST` | `/api/admin/clear-cache` | 清除記憶體快取 |
+| `GET` | `/api/admin/stats` | FinMind 呼叫次數、資料來源統計、資料庫用量 |
+| `GET` | `/api/news-debug/<stock_id>` | 診斷新聞來源連線狀態 |
+
+管理員呼叫 `?refresh=1` 時會強制更新，不受 10 分鐘間隔限制。
+
+</details>
+
+**範例**
+
+```bash
+curl "http://127.0.0.1:5000/api/stock/2330?limit=8"
+curl -X POST -H "X-Admin-Key: $ADMIN_KEY" http://127.0.0.1:5000/api/admin/clear-cache
+```
+
+---
+
+## 🚦 警訊規則
+
+規則參考帆軟〈[財報分析入門](https://www.fanruan.com/zh-tw/blog/financial-report-analysis-beginners)〉與 PTT Stock〈[財報三表完全解析](https://pttstock.tw/financial-statements/)〉：財務比率沒有跨產業通用的安全值，應比較連續多季趨勢與去年同期。因此多數規則以「連續季數」與「去年同季」判斷。除「營業現金流低於稅後淨利」的 1 倍門檻出自文章外，其餘數字門檻為本系統的設定值，定義在 [js/rules.js](js/rules.js) 的 `RULES_CONFIG`。
+
+<details>
+<summary>完整規則列表（一般類型）</summary>
+
+| 報表 | 警訊 | 燈號 |
+| --- | --- | :---: |
+| 損益表 | 營收連續衰退（連續 3 季） | 🔴 |
+| 損益表 | 毛利率連續下滑（連續 3 季） | 🟡 |
+| 損益表 | 毛利率單季暴跌 | 🟡 |
+| 損益表 | 營收成長但毛利率下滑 | 🟡 |
+| 損益表 | 營收成長但營業利益衰退 | 🟡 |
+| 損益表 | 費用侵蝕本業獲利 | 🟡 |
+| 損益表 | 本業與獲利背離 | 🟡 |
+| 資產負債表 | 流動比率過低（< 1.0） | 🔴 |
+| 資產負債表 | 速動比率偏低（< 0.8） | 🟡 |
+| 資產負債表 | 負債比過高（> 70%） | 🟡 |
+| 資產負債表 | 負債比持續攀升 | 🟡 |
+| 資產負債表 | 應收帳款增加快於營收 | 🟡 |
+| 資產負債表 | 存貨增加快於銷貨 | 🟡 |
+| 資產負債表 | 利息保障倍數偏低（< 3 黃燈、< 1.5 紅燈） | 🟡／🔴 |
+| 現金流量表 | 獲利含金量不足（近 8 季營業現金流 < 稅後淨利） | 🟡 |
+| 現金流量表 | 淨利為正但無現金流入 | 🟡 |
+| 現金流量表 | 營業現金流連續為負（連續 3 季） | 🔴 |
+| 現金流量表 | 自由現金流連續為負（連續 3 季） | 🟡 |
+| 現金流量表 | 靠融資撐現金 | 🔴 |
+
+</details>
+
+**公司類型**：一般（預設）、電子製造／半導體、傳產／景氣循環、成長股、高股息／存股型、零售／通路／服務、營建、金融業。各類型會停用不適用的規則或調整門檻，完整差異可在網站的「規則與說明」頁查看。
+
+**健康度雷達圖**：以最新一季資料，從獲利能力、成長性、償債能力、現金流、經營效率五個面向各給 0–100 分（設定見 `SCORE_CONFIG`）。
+
+---
+
+## 🗺️ 未來規劃
+
+- [ ] 加入截圖與線上 Demo 連結
+- [ ] 提供 Supabase 建表 SQL 檔
+- [ ] 後端單元測試（財務指標計算、規則判斷）
+- [ ] 警訊觸發時的通知
+
+---
+
+## 🙏 致謝
+
+- [FinMind](https://finmindtrade.com/)：台股財報、月營收與產業別資料
+- [臺灣證券交易所 OpenAPI](https://openapi.twse.com.tw/)、[證券櫃檯買賣中心 OpenAPI](https://www.tpex.org.tw/openapi/)：收盤價
+- [MoneyDJ](https://www.moneydj.com/)：ETF 成分股
+- [Chart.js](https://www.chartjs.org/)：圖表
+- README 結構參考 [awesome-readme](https://github.com/matiassingers/awesome-readme) 與 [Standard Readme](https://github.com/RichardLitt/standard-readme)
+
+## 📄 授權
+
+本專案目前尚未指定開源授權。若要開放他人使用或修改，建議加入 `LICENSE` 檔（例如 [MIT](https://choosealicense.com/licenses/mit/)）。
