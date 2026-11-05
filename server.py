@@ -62,7 +62,7 @@ MANUAL_CHECK_INTERVAL = 600
 
 RATE_LIMIT = 30
 RATE_WINDOW = 60
-RATE_LIMITED_PREFIXES = ('/api/stock', '/api/monthly', '/api/news', '/api/etf')
+RATE_LIMITED_PREFIXES = ('/api/stock', '/api/monthly', '/api/news', '/api/etf', '/api/quotes')
 
 try:
     TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", 1))
@@ -1244,8 +1244,10 @@ def api_admin_stats():
 
 from news import register_news
 from etf import register_etf
+from quotes import register_quotes
 register_news(app, supabase=supabase)
 register_etf(app, supabase=supabase, get_holding_details=get_holding_details)
+register_quotes(app, get_industry_map=get_industry_map)
 
 if __name__ == '__main__':
     is_debug = os.getenv("FLASK_DEBUG", "False").lower() == "true"

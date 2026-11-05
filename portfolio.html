@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-TW" data-theme="dark">
+<head>
+  <!-- Vercel Web Analytics -->
+  <script defer src="/_vercel/insights/script.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>投資組合健檢 - 財報健檢</title>
+  <link rel="stylesheet" href="css/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <div class="nav-container">
+      <div class="logo">📈 財報健檢儀表板</div>
+      <nav class="nav-links">
+        <a href="index.html">已查詢股票</a>
+        <a href="alerts.html">警訊總覽</a>
+        <a href="details.html">個股詳情</a>
+        <a href="portfolio.html">投資組合健檢</a>
+        <a href="rules.html">規則與說明</a>
+      </nav>
+      <button class="theme-toggle" onclick="toggleTheme()" title="切換深淺色">🌓</button>
+    </div>
+  </header>
+  <main>
+    <div class="card">
+      <h3 style="margin-bottom:4px;">🔍 投資組合綜合健檢</h3>
+      <p class="section-hint" style="margin-bottom:16px;">
+        輸入你持有的所有股票與 ETF 及股數（1 張 = 1,000 股）。系統會把每檔 ETF 拆解成底層成分股，與個股持倉加總，
+        算出你「真正」持有每家公司與每個產業的比例——不同名稱的 ETF 可能重壓同一批股票。
+      </p>
+      <div class="xray-presets">
+        <span class="xray-presets-label">我的組合：</span>
+        <div id="xray-preset-list" class="xray-preset-list"></div>
+        <button class="btn-outline" onclick="saveXrayPreset()">💾 儲存目前組合</button>
+      </div>
+      <p class="section-hint" style="font-size:0.8rem; margin:-4px 0 12px 0;">
+        組合只存在這台電腦的瀏覽器中，不會上傳到伺服器，其他人看不到你的持股與股數。
+      </p>
+      <div id="xray-rows"></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;">
+        <button class="btn-outline" onclick="addXrayRow()">＋ 新增一列</button>
+        <button class="btn-outline" onclick="loadXrayExample()">載入範例</button>
+        <button class="btn-primary" id="xray-run" onclick="runXray()">開始健檢</button>
+      </div>
+      <div id="xray-status" style="display:none; margin-top:12px; font-size:0.9rem;"></div>
+    </div>
+
+    <div id="xray-result" style="display:none;">
+      <div class="card">
+        <div class="flex-between" style="flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+          <h3 style="margin:0;">健檢摘要</h3>
+          <span id="xray-price-date" class="card-updated"></span>
+        </div>
+        <div id="xray-stats" class="xray-stats"></div>
+        <div id="xray-insights" style="margin-top:16px;"></div>
+        <div id="xray-issues" style="display:none; margin-top:12px; color:var(--yellow); font-size:0.85rem; line-height:1.6;"></div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:4px;">真實持股前 15 大</h3>
+        <p class="section-hint" style="margin-bottom:12px;">每條長度 = 該公司佔總市值的比例；顏色代表這部分曝險來自哪一檔持倉。</p>
+        <div class="chart-container"><canvas id="xray-stock-chart" role="img" aria-label="底層個股真實持股比例，依持倉來源堆疊"></canvas></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <h3 style="margin-bottom:12px;">產業真實曝險</h3>
+          <div id="xray-industries"></div>
+        </div>
+        <div class="card" id="xray-overlap-card">
+          <h3 style="margin-bottom:4px;">ETF 成分重疊度</h3>
+          <p class="section-hint" style="margin-bottom:12px;">兩檔 ETF 共同持股的權重（取兩邊較小值加總）。數字越高，同時持有的分散效果越低。</p>
+          <div class="table-responsive" style="margin-top:0;" id="xray-overlap"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:4px;">持倉明細</h3>
+        <div class="table-responsive">
+          <table>
+            <thead><tr><th>代號</th><th>名稱</th><th style="text-align:right;">股數</th><th style="text-align:right;">收盤價</th><th style="text-align:right;">市值</th><th style="text-align:right;">佔比</th><th>拆解</th></tr></thead>
+            <tbody id="xray-sources-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin-bottom:4px;">底層個股明細</h3>
+        <p class="section-hint">點選代號可查看該公司財報。</p>
+        <div class="table-responsive">
+          <table>
+            <thead><tr><th>#</th><th>公司</th><th>產業</th><th style="text-align:right;">真實權重</th><th style="text-align:right;">曝險金額</th><th>來源</th></tr></thead>
+            <tbody id="xray-stock-body"></tbody>
+          </table>
+        </div>
+        <div style="text-align:center; margin-top:12px;">
+          <button class="btn-outline" id="xray-stock-toggle" onclick="toggleXrayStocks()" style="display:none;"></button>
+        </div>
+      </div>
+
+      <p class="section-hint" style="font-size:0.8rem; margin-bottom:24px;">
+        * 以最近收盤價與 ETF 最新公布的成分股權重估算，ETF 市價與淨值可能有些微差異；本頁僅供資產配置參考，不構成投資建議。
+      </p>
+    </div>
+  </main>
+
+  <script src="js/rules.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/etf.js"></script>
+  <script src="js/portfolio.js"></script>
+  <script> initPortfolioXray(); </script>
+</body>
+</html>

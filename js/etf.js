@@ -636,6 +636,7 @@ function createRiskCell(holding) {
 // --- 詳情頁：預覽模式 (不在自選股的一般股票) ---
 async function startPreviewMode(stockId, fromEtfId) {
     // fromEtfId 來自網址參數，會被拼進 HTML 與 onclick，不合格式一律丟棄
+    const fromPortfolio = fromEtfId === 'portfolio';
     if (!isEtfId(fromEtfId)) fromEtfId = '';
     const banner = document.getElementById('preview-banner');
     const content = document.getElementById('detail-content');
@@ -653,6 +654,8 @@ async function startPreviewMode(stockId, fromEtfId) {
     let backLink = '';
     if (fromEtfId) {
         backLink = `<a href="details.html?id=${fromEtfId}" style="margin-right:16px;">← 返回 ${fromEtfId} 成分股</a>`;
+    } else if (fromPortfolio) {
+        backLink = `<a href="portfolio.html" style="margin-right:16px;">← 返回投資組合健檢</a>`;
     }
     
     banner.innerHTML = `

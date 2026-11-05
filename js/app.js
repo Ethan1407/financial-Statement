@@ -46,6 +46,7 @@ function toggleTheme() {
   const next = current === 'dark' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', next);
   localStorage.setItem('app_theme', next);
+  window.dispatchEvent(new Event('themechange'));
   if (typeof renderCharts === 'function' && window.currentStockId) {
     renderCharts(window.currentStockId, window.currentAlerts);
   }

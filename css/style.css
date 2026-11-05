@@ -172,3 +172,28 @@ th { background-color: rgba(0,0,0,0.02); color: var(--text-light); font-weight: 
         font-size: 0.9rem;
     }
 }
+/* ================= 投資組合健檢 ================= */
+.xray-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; gap: 8px; margin-bottom: 8px; max-width: 520px; }
+.xray-row input { width: 100%; min-height: 40px; }
+.xray-remove { padding: 0; min-height: 40px; }
+.xray-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
+.xray-stat-label { color: var(--text-light); font-size: 0.9rem; }
+.xray-stat-value { font-size: 1.5rem; font-weight: bold; color: var(--text); font-variant-numeric: tabular-nums; }
+.xray-stat-sub { color: var(--text-light); font-size: 0.8rem; margin-top: 2px; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.grid-2 > .card { margin-bottom: 16px; }
+.xray-matrix { min-width: 0; }
+.xray-matrix th, .xray-matrix td { padding: 8px; white-space: nowrap; }
+.xray-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 0.8rem; color: var(--text-light); margin: 2px 8px 2px 0; white-space: nowrap; }
+@media (max-width: 480px) {
+  .grid-2 { grid-template-columns: 1fr; }
+}
+.xray-presets { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.xray-presets-label { color: var(--text-light); font-size: 0.9rem; }
+.xray-preset-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.xray-preset { display: inline-flex; border: 1px solid var(--primary); border-radius: 16px; overflow: hidden; }
+.xray-preset button { background: transparent; border-radius: 0; min-height: 34px; }
+.xray-preset-load { color: var(--primary); padding: 4px 4px 4px 12px; }
+.xray-preset-load:hover { background: rgba(59, 130, 246, 0.1); }
+.xray-preset-del { color: var(--text-light); padding: 4px 10px 4px 6px; font-weight: normal; }
+.xray-preset-del:hover { color: var(--red); }
