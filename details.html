@@ -77,6 +77,15 @@
         <div id="detail-alerts-summary" style="margin-top: 12px; font-size: 0.9rem;"></div>
       </div>
 
+      <!-- 官方資料連結：只放連結、導向官方來源，不下載或保存檔案 -->
+      <div class="card" id="links-card" style="margin-bottom: 16px;">
+        <div class="flex-between" style="margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+          <h3 style="margin: 0;">🔗 官方資料連結</h3>
+          <span style="font-size: 0.85rem; color: var(--text-light);">連到證交所、公開資訊觀測站官方頁面</span>
+        </div>
+        <div id="official-links" class="link-grid"></div>
+      </div>
+
       <!-- ================= 相關新聞區塊 (搬移至此) ================= -->
       <div class="card" id="news-card" style="margin-bottom: 16px;">
         <div class="flex-between" style="margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
@@ -127,6 +136,7 @@
           <button class="tab-btn active" onclick="switchDetailTab('income')">損益表</button>
           <button class="tab-btn" onclick="switchDetailTab('balance')">財務狀況表</button>
           <button class="tab-btn" onclick="switchDetailTab('cashflow')">現金流量表</button>
+          <button class="tab-btn" onclick="switchDetailTab('monthly')">月營收</button>
         </div>
 
         <div id="tab-income" class="tab-content active">
@@ -161,6 +171,21 @@
               <thead><tr><th>季度</th><th>營業現金流(百萬)</th><th>融資現金流(百萬)</th><th>自由現金流(百萬)</th><th>期末現金(百萬)</th></tr></thead>
               <tbody></tbody>
             </table>
+          </div>
+        </div>
+
+        <div id="tab-monthly" class="tab-content">
+          <p id="monthly-status" style="color: var(--text-light); font-size: 0.9rem; margin: 8px 0;"></p>
+          <div id="monthly-body" style="display:none;">
+            <div class="chart-container"><canvas id="chart-monthly"></canvas></div>
+            <h4 style="margin-top: 24px;">月營收數據明細</h4>
+            <div class="table-responsive">
+              <table id="table-monthly">
+                <thead><tr><th>年月</th><th>營收(百萬)</th><th>月增率</th><th>年增率</th><th>累計年增率</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <p style="font-size: 0.8rem; color: var(--text-light); margin-top: 12px;">月營收每月 10 日前公布，比季報早反映營運變化。資料來源：FinMind。</p>
           </div>
         </div>
       </div>

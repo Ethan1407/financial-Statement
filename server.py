@@ -84,6 +84,10 @@ except (TypeError, ValueError):
     STORAGE_LIMIT_MB = 500
 STORAGE_MAX_RATIO, STORAGE_TARGET_RATIO = 0.85, 0.75
 storage_check_cache = TTLCache(ttl=600, maxsize=1)  # 每 10 分鐘最多檢查一次
+# 資料庫讀取失敗後，60 秒內直接跳過資料庫改向 FinMind 抓，避免每個請求都卡在連線逾時
+DB_RETRY_SECONDS = 60
+db_down_cache = TTLCache(ttl=DB_RETRY_SECONDS, maxsize=1)
+DB_FALLBACK_WARNING = "資料庫暫時無法連線，本次直接向 FinMind 抓取（未使用快取）"
 stock_locks = LockRegistry()
 global_lock = threading.Lock()
 
@@ -101,7 +105,7 @@ stats = {
     "full_fetches_today": 0,
     "sources": {
         "db": 0, "db-verified": 0, "updated": 0, "full": 0,
-        "recompute": 0, "db-stale": 0, "mem-cache": 0
+        "recompute": 0, "db-stale": 0, "mem-cache": 0, "finmind-direct": 0
     }
 }
 
@@ -278,6 +282,14 @@ def get_holding_details(stock_ids):
         except Exception as e:
             print(f"[ETF] 成分股財報讀取失敗: {e}")
     return {sid: {"industries": industry_map.get(sid, []), "financials": stored.get(sid)} for sid in stock_ids}
+
+def db_available():
+    return supabase is not None and not db_down_cache.get("down")
+
+def mark_db_down(context, err):
+    if not db_down_cache.get("down"):
+        print(f"⚠️ 資料庫連線失敗（{context}）：{err}，{DB_RETRY_SECONDS} 秒內改為直接向 FinMind 抓取")
+    db_down_cache.set("down", True)
 
 def get_raw_from_db(stock_id):
     if not supabase: return {}
@@ -575,17 +587,22 @@ def compute_monthly_from_raw(stock_id, raw_dict):
 def process_financials(stock_id, refresh_mode=False, allow_full=True):
     with get_stock_lock(stock_id):
         db_res = None
-        db_error = False
-        if supabase:
+        db_error = supabase is not None and not db_available()
+        if db_available():
             try:
                 res = supabase.table("stock_results").select("*").eq("stock_id", stock_id).execute()
                 if res.data: db_res = res.data[0]
             except Exception as e:
-                print(f"[{stock_id}] stock_results 讀取失敗: {e}")
+                mark_db_down(f"{stock_id} stock_results", e)
                 db_error = True
 
+        # 資料庫連不上：退回直接向 FinMind 完整抓取，不讀寫資料庫
         if db_error:
-            return None, "資料庫連線異常，暫不提供服務", 502
+            if not allow_full:
+                return None, "資料庫暫時無法連線，請單獨查詢這檔股票", 503
+            if not check_daily_cap():
+                return None, "今日伺服器免費配額已滿，請明天再試", 429
+            return full_fetch_financials(stock_id, use_db=False)
 
         if db_res:
             # 季數過少時先確認原始資料是否缺漏（例如只剩最新一季），缺漏就完整重抓
@@ -759,9 +776,10 @@ def ensure_storage_capacity():
             memory_cache.pop(f"{sid}_v{CALC_VERSION}")
             monthly_memory_cache.pop(f"{sid}_monthly")
 
-def full_fetch_financials(stock_id):
-    """從 START_DATE 起完整抓取四個資料集並重算。呼叫端需持有 stock lock 並已通過 check_daily_cap。"""
-    ensure_storage_capacity()
+def full_fetch_financials(stock_id, use_db=True):
+    """從 START_DATE 起完整抓取四個資料集並重算。呼叫端需持有 stock lock 並已通過 check_daily_cap。
+    use_db=False 時（資料庫連不上）不讀寫資料庫，結果只放記憶體快取。"""
+    if use_db: ensure_storage_capacity()
     # 先抓損益表確認有財報，查無資料（代號不存在）只花 1 次 API，也不寫入 DB
     income_data, err = fetch_finmind_data("TaiwanStockFinancialStatements", stock_id)
     if err:
@@ -775,39 +793,48 @@ def full_fetch_financials(stock_id):
         raw_dict = {ds: f.result()[0] or [] for ds, f in fs.items()}
     raw_dict["TaiwanStockFinancialStatements"] = income_data
 
-    for ds, data in raw_dict.items():
-        upsert_raw_to_db(stock_id, ds, data)
+    if use_db:
+        for ds, data in raw_dict.items():
+            upsert_raw_to_db(stock_id, ds, data)
 
     new_res = compute_financials_from_raw(stock_id, raw_dict)
     latest_inc_date = new_res.pop("_latest_income_date")
     now_str = get_iso_now()
 
-    try:
-        supabase.table("stock_results").upsert({
-            "stock_id": stock_id, "calc_version": CALC_VERSION, "result": new_res,
-            "latest_income_date": latest_inc_date, "latest_quarter": new_res.get("latestCompleteQuarter"),
-            "complete": not new_res.get("latestQuarterPartial"), "checked_at": now_str, "updated_at": now_str
-        }).execute()
-    except Exception: pass
+    if use_db:
+        try:
+            supabase.table("stock_results").upsert({
+                "stock_id": stock_id, "calc_version": CALC_VERSION, "result": new_res,
+                "latest_income_date": latest_inc_date, "latest_quarter": new_res.get("latestCompleteQuarter"),
+                "complete": not new_res.get("latestQuarterPartial"), "checked_at": now_str, "updated_at": now_str
+            }).execute()
+        except Exception: pass
+    elif supabase is not None:
+        new_res["warnings"].append(DB_FALLBACK_WARNING)
 
-    new_res["meta"] = {"source": "full", "finmindCalls": 4, "checkedAt": now_str, "stale": False}
+    source = "full" if use_db or supabase is None else "finmind-direct"
+    new_res["meta"] = {"source": source, "finmindCalls": 4, "checkedAt": now_str, "stale": False}
     new_res["_updated_at"] = now_str
-    record_stats("full", 4, is_full=True)
+    record_stats(source, 4, is_full=True)
     return new_res, None, 200
 
 def process_monthly(stock_id, refresh_mode=False):
     with get_stock_lock(stock_id):
         db_res = None
-        db_error = False
-        if supabase:
+        db_error = supabase is not None and not db_available()
+        if db_available():
             try:
                 res = supabase.table("monthly_results").select("*").eq("stock_id", stock_id).execute()
                 if res.data: db_res = res.data[0]
-            except Exception:
+            except Exception as e:
+                mark_db_down(f"{stock_id} monthly_results", e)
                 db_error = True
 
+        # 資料庫連不上：退回直接向 FinMind 抓取月營收，不讀寫資料庫
         if db_error:
-            return None, "資料庫連線異常，暫不提供服務", 502
+            if not check_daily_cap():
+                return None, "今日伺服器免費配額已滿，請明天再試", 429
+            return full_fetch_monthly(stock_id, use_db=False)
 
         if db_res:
             db_checked_at = db_res.get("checked_at")
@@ -898,8 +925,9 @@ def process_monthly(stock_id, refresh_mode=False):
                 return None, "今日伺服器免費配額已滿，請明天再試", 429
             return full_fetch_monthly(stock_id)
 
-def full_fetch_monthly(stock_id):
-    """從 START_DATE 起完整抓取月營收並重算。呼叫端需持有 stock lock 並已通過 check_daily_cap。"""
+def full_fetch_monthly(stock_id, use_db=True):
+    """從 START_DATE 起完整抓取月營收並重算。呼叫端需持有 stock lock 並已通過 check_daily_cap。
+    use_db=False 時（資料庫連不上）不寫入資料庫，結果只放記憶體快取。"""
     probe_data, err = fetch_finmind_data("TaiwanStockMonthRevenue", stock_id)
     if err:
         return None, f"獲取新股票資料失敗 ({err})", 502
@@ -907,23 +935,26 @@ def full_fetch_monthly(stock_id):
         return None, "查無此股票的月營收資料", 404
 
     raw_dict = {"TaiwanStockMonthRevenue": probe_data}
-    upsert_raw_to_db(stock_id, "TaiwanStockMonthRevenue", probe_data)
+    if use_db:
+        upsert_raw_to_db(stock_id, "TaiwanStockMonthRevenue", probe_data)
 
     new_res = compute_monthly_from_raw(stock_id, raw_dict)
     latest_date = new_res.pop("_latest_date")
     now_str = get_iso_now()
 
-    try:
-        supabase.table("monthly_results").upsert({
-            "stock_id": stock_id, "result": new_res,
-            "latest_date": latest_date, "checked_at": now_str, "updated_at": now_str
-        }).execute()
-    except Exception: pass
+    if use_db:
+        try:
+            supabase.table("monthly_results").upsert({
+                "stock_id": stock_id, "result": new_res,
+                "latest_date": latest_date, "checked_at": now_str, "updated_at": now_str
+            }).execute()
+        except Exception: pass
 
+    source = "full" if use_db or supabase is None else "finmind-direct"
     new_res["fetchedAt"] = now_str
-    new_res["meta"] = {"source": "full", "finmindCalls": 1, "checkedAt": now_str, "stale": False}
+    new_res["meta"] = {"source": source, "finmindCalls": 1, "checkedAt": now_str, "stale": False}
     new_res["_updated_at"] = now_str
-    record_stats("full", 1)
+    record_stats(source, 1)
     return new_res, None, 200
 
 # ================= 網頁呼叫路由 =================
@@ -1068,16 +1099,17 @@ def api_get_stocks_batch():
             print(f"[{sid}] batch meta.source: mem-cache | finmindCalls: 0")
             continue
             
+        # 資料庫已有的股票可以更新；新股票（或資料庫連不上時）每批最多完整抓 3 檔
         allow_full = False
-        if supabase:
+        if db_available():
             try:
                 db_check = supabase.table("stock_results").select("stock_id").eq("stock_id", sid).execute()
-                if db_check.data:
-                    allow_full = True
-                elif full_fetch_count < 3:
-                    allow_full = True
-                    full_fetch_count += 1
-            except: pass
+                allow_full = bool(db_check.data)
+            except Exception as e:
+                mark_db_down(f"{sid} batch", e)
+        if not allow_full and full_fetch_count < 3:
+            allow_full = True
+            full_fetch_count += 1
             
         res, err, status = process_financials(sid, refresh_mode=refresh_mode, allow_full=allow_full)
         if err:

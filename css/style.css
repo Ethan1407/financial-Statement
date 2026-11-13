@@ -211,3 +211,12 @@ th { background-color: rgba(0,0,0,0.02); color: var(--text-light); font-weight: 
   .nav-links { order: 3; width: 100%; gap: 4px; }  /* 第一列：logo + 深淺色按鈕；第二列：可橫向滑動的選單 */
   main { padding: 0 16px; margin-top: 16px; }
 }
+
+/* ================= 官方資料連結 ================= */
+.tabs { overflow-x: auto; }
+.tab-btn { white-space: nowrap; }
+.link-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+.link-item { display: block; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); transition: 0.2s; }
+.link-item:hover { border-color: var(--primary); }
+.link-item strong { display: block; margin-bottom: 4px; color: var(--primary); }
+.link-item span { font-size: 0.85rem; color: var(--text-light); line-height: 1.4; }

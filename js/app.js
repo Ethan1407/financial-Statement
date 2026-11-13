@@ -648,6 +648,10 @@ function loadDetailView(stockId, skipNews = false) {
             ℹ️ <strong>資料完整度提示：</strong>本檔有 ${analysis.skipped.length} 項規則因資料不足未判斷 (${skippedNames})
           </div>`;
       }
+      const meta = analysis.data.meta || {};
+      if (meta.source === 'finmind-direct') {
+          alertsSumHtml += `<div style="margin-top:8px; color:var(--yellow); font-size:0.85rem;">ℹ️ 資料庫暫時無法連線，這份資料是直接向 FinMind 抓取的（未使用快取）。</div>`;
+      }
       alertsSumEl.innerHTML = alertsSumHtml;
   }
 
@@ -671,9 +675,130 @@ function loadDetailView(stockId, skipNews = false) {
     if (tbodyCashflow) tbodyCashflow.innerHTML += `<tr><td>${q.q}</td><td>${fmt(q.operatingCF)}</td><td>${fmt(q.financingCF)}</td><td>${fmt(q.freeCF, true)}</td><td>${fmt(q.cashEnd)}</td></tr>`;
   });
 
+  renderOfficialLinks(stockId);
   setTimeout(() => renderCharts(stockId, analysis.alerts), 0);
-  
+  loadMonthly(stockId);
+
   if (!skipNews) loadNews(stockId);
+}
+
+// ==========================================
+// 🔗 官方資料連結（只放連結，不下載、不保存檔案）
+// ==========================================
+function renderOfficialLinks(stockId) {
+  const el = document.getElementById('official-links');
+  if (!el) return;
+  const id = encodeURIComponent(stockId);
+  const roc = new Date().getFullYear() - 1911;  // 民國年
+  // 證交所「電子資料查詢作業」：可直接帶入代號，上市、上櫃都適用
+  const docUrl = (year, mtype) => `https://doc.twse.com.tw/server-java/t57sb01?step=1&colorchg=1&co_id=${id}&year=${year}&mtype=${mtype}`;
+  const links = [
+    { title: `股東會年報（${roc} 年）`, desc: `今年股東會資料，含 ${roc - 1} 年度年報、議事手冊`, url: docUrl(roc, 'F') },
+    { title: `股東會年報（${roc - 1} 年）`, desc: `去年股東會資料，含 ${roc - 2} 年度年報`, url: docUrl(roc - 1, 'F') },
+    { title: `財務報告書（${roc} 年）`, desc: '會計師查核／核閱的完整財報 PDF', url: docUrl(roc, 'A') },
+    { title: `財務報告書（${roc - 1} 年）`, desc: '去年各季與年度財報 PDF', url: docUrl(roc - 1, 'A') },
+    { title: '法人說明會', desc: `公開資訊觀測站法說會一覽表，請輸入代號 ${stockId} 查詢`, url: 'https://mopsov.twse.com.tw/mops/web/t100sb02_1' },
+    { title: '重大訊息', desc: `公開資訊觀測站重大訊息，請輸入代號 ${stockId} 查詢`, url: 'https://mopsov.twse.com.tw/mops/web/t05st01' }
+  ];
+  el.innerHTML = links.map(l => `
+    <a class="link-item" href="${l.url}" target="_blank" rel="noopener noreferrer">
+      <strong>${escapeHtml(l.title)} ↗</strong>
+      <span>${escapeHtml(l.desc)}</span>
+    </a>`).join('');
+}
+
+// ==========================================
+// 📅 月營收（只放記憶體，不寫入 localStorage，避免占用瀏覽器空間）
+// ==========================================
+const monthlyCache = {};
+let monthlyController = null;
+
+async function loadMonthly(stockId) {
+  const statusEl = document.getElementById('monthly-status');
+  const bodyEl = document.getElementById('monthly-body');
+  if (!statusEl || !bodyEl) return;
+
+  if (monthlyCache[stockId]) {
+      renderMonthly(stockId);
+      return;
+  }
+
+  if (monthlyController) monthlyController.abort();
+  monthlyController = new AbortController();
+  bodyEl.style.display = 'none';
+  statusEl.innerHTML = '月營收載入中…';
+
+  try {
+      const response = await fetch(`${API_BASE}/api/monthly/${encodeURIComponent(stockId)}?months=24`, { signal: monthlyController.signal });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || '月營收暫時無法取得');
+      monthlyCache[stockId] = data;
+      if (window.currentStockId === stockId) renderMonthly(stockId);
+  } catch (err) {
+      if (err.name === 'AbortError') return;
+      statusEl.innerHTML = `${escapeHtml(err.message)} <button class="btn-outline" style="margin-left:8px;" onclick="loadMonthly('${stockId}')">重試</button>`;
+  }
+}
+
+function renderMonthly(stockId) {
+  const statusEl = document.getElementById('monthly-status');
+  const bodyEl = document.getElementById('monthly-body');
+  const data = monthlyCache[stockId];
+  const months = (data && data.months) || [];
+  if (!months.length) {
+      bodyEl.style.display = 'none';
+      statusEl.textContent = '此公司目前沒有月營收資料。';
+      return;
+  }
+
+  const meta = data.meta || {};
+  const stale = meta.stale ? '（暫時無法連線 FinMind，顯示上次的資料）'
+      : (meta.source === 'finmind-direct' ? '（資料庫暫時無法連線，直接向 FinMind 抓取）' : '');
+  statusEl.textContent = `最新月份：${data.latestMonth || months[months.length - 1].ym}${stale}`;
+  bodyEl.style.display = 'block';
+
+  const pctCell = val => {
+      if (val == null) return '<td>—</td>';
+      const color = val > 0 ? 'var(--green)' : (val < 0 ? 'var(--red)' : 'var(--text)');
+      return `<td style="color:${color}">${val > 0 ? '+' : ''}${val}%</td>`;
+  };
+  document.querySelector('#table-monthly tbody').innerHTML = [...months].reverse().map(m =>
+      `<tr><td>${escapeHtml(m.ym)}</td><td>${m.revenue == null ? '—' : Number(m.revenue).toLocaleString()}</td>${pctCell(m.mom)}${pctCell(m.yoy)}${pctCell(m.cumYoY)}</tr>`
+  ).join('');
+
+  renderMonthlyChart(stockId);
+}
+
+function renderMonthlyChart(stockId) {
+  const canvas = document.getElementById('chart-monthly');
+  const data = monthlyCache[stockId];
+  if (!canvas || !data || !data.months || !data.months.length) return;
+  const months = data.months;
+  const style = getComputedStyle(document.body);
+  const textColor = style.getPropertyValue('--text').trim() || '#e5e7eb';
+  const gridColor = style.getPropertyValue('--border').trim() || '#374151';
+
+  if (currentCharts['chart-monthly']) currentCharts['chart-monthly'].destroy();
+  currentCharts['chart-monthly'] = new Chart(canvas.getContext('2d'), {
+      type: 'bar',
+      data: {
+          labels: months.map(m => m.ym),
+          datasets: [
+              // order 較小的畫在上層，讓折線不被半透明長條蓋住
+              { label: '月營收 (百萬)', data: months.map(m => m.revenue), backgroundColor: 'rgba(59, 130, 246, 0.5)', yAxisID: 'y', order: 2 },
+              { label: '年增率 (%)', data: months.map(m => m.yoy), type: 'line', borderColor: '#f59e0b', backgroundColor: '#f59e0b', yAxisID: 'y1', order: 1 }
+          ]
+      },
+      options: {
+          responsive: true, maintainAspectRatio: false, spanGaps: false,
+          scales: {
+              x: { ticks: { color: textColor }, grid: { color: gridColor } },
+              y: { ticks: { color: textColor }, grid: { color: gridColor } },
+              y1: { position: 'right', ticks: { color: textColor }, grid: { drawOnChartArea: false } }
+          },
+          plugins: { legend: { labels: { color: textColor } } }
+      }
+  });
 }
 
 function renderCharts(stockId, alerts = []) {
@@ -810,6 +935,9 @@ function renderCharts(stockId, alerts = []) {
   createChart('chart-risk', 'line', [
     { label: '歷史風險分數 (最高 100)', data: analysis.histRiskScores, borderColor: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.1)', fill: true, tension: 0.3 }
   ], { y: { min: 0, max: 100 } });
+
+  // 切換主題時月營收圖也要跟著重畫
+  renderMonthlyChart(stockId);
 }
 
 // ==========================================

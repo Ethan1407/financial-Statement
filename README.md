@@ -93,6 +93,8 @@ flowchart LR
 - 每個 IP 每 60 秒最多 30 次 API 請求。
 - 同一檔股票以獨立的鎖（`LockRegistry`）避免同時重複抓取。
 - FinMind 失敗時暫停該資料集 10 分鐘，並回傳資料庫中的舊資料（標記為 `db-stale`）。
+- Supabase 連不上時（例如免費專案被暫停），改為直接向 FinMind 抓取、不讀寫資料庫（標記為 `finmind-direct`），60 秒內不再嘗試連線資料庫；批次查詢此時每批最多抓 3 檔。
+- GitHub Actions（[.github/workflows/keepalive.yml](.github/workflows/keepalive.yml)）每週一、四呼叫 `/api/health`，喚醒 Render 並查詢一次 Supabase，避免免費專案因 7 天沒有活動被暫停；Supabase 沒連上時工作會失敗，GitHub 會寄信通知。
 - 資料庫用量超過上限的 85% 時，從最久沒更新的股票開始刪除，降到 75%。
 - 回應附 `ETag`，資料沒變時回傳 `304 Not Modified`。
 
