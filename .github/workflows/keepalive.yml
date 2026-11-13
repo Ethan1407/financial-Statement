@@ -1,22 +1,24 @@
-# 定期呼叫後端 /api/health：喚醒 Render，並讓後端實際查詢一次 Supabase，
-# 避免免費方案因連續 7 天沒有活動而被暫停。每週跑兩次，其中一次失敗也還有備援。
-# Supabase 沒連上時這個工作會失敗，GitHub 會寄信通知儲存庫擁有者。
+# 每天呼叫後端兩個端點：
+# 1. /api/health：喚醒 Render，並讓後端實際查詢一次 Supabase，避免免費方案因 7 天沒有活動被暫停。
+#    Supabase 沒連上時這個工作會失敗，GitHub 會寄信通知儲存庫擁有者。
+# 2. /api/conferences/sync：觸發法說會每日同步（後端自己限制每天最多一次、在背景執行）。
+#    這一步失敗只會顯示警告，不會讓工作失敗。
 name: Supabase keep-alive
 
 on:
   schedule:
-    - cron: '0 1 * * 1,4'   # 每週一、四 01:00 UTC（台灣時間 09:00）
+    - cron: '0 1 * * *'     # 每天 01:00 UTC（台灣時間 09:00）
   workflow_dispatch:         # 也可以在 GitHub 的 Actions 頁面手動執行
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # 可在 Settings → Secrets and variables → Actions → Variables 設定 API_BASE 覆寫
+      API_BASE: ${{ vars.API_BASE || 'https://financial-statement-xou2.onrender.com' }}
     steps:
       - name: 呼叫後端健康檢查
-        env:
-          # 可在 Settings → Secrets and variables → Actions → Variables 設定 API_BASE 覆寫
-          API_BASE: ${{ vars.API_BASE || 'https://financial-statement-xou2.onrender.com' }}
         run: |
           body=""
           # Render 免費方案閒置後要 30～60 秒才會醒，失敗就多試幾次
@@ -38,3 +40,15 @@ jobs:
             exit 1
           fi
           echo "Supabase 連線正常"
+
+      - name: 觸發法說會同步
+        run: |
+          if body=$(curl -sS --fail --max-time 60 -X POST "$API_BASE/api/conferences/sync"); then
+            echo "$body"
+          else
+            echo "::warning::法說會同步端點沒有回應"
+          fi
+          # 同步在背景進行（約 1～2 分鐘），等一下再看結果（今天已同步過，不會重複觸發）
+          sleep 120
+          curl -sS --max-time 60 "$API_BASE/api/conferences/sync" || true
+          echo

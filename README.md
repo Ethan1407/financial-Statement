@@ -34,13 +34,15 @@
 
 | 頁面 | 說明 |
 | --- | --- |
-| **已查詢股票** `index.html` | 管理自選股，依代號或燈號嚴重程度排序；同時列出曾查詢但未加入自選的公司與 ETF。 |
+| **已查詢股票** `index.html` | 管理自選股，依代號或燈號嚴重程度排序；同時列出曾查詢但未加入自選的公司與 ETF，以及依查詢紀錄列出的同類型公司。 |
 | **警訊總覽** `alerts.html` | 彙整所有自選股觸發的警訊，可依公司分組或依嚴重程度排序，並篩選紅燈／黃燈。 |
-| **個股詳情** `details.html` | 近 8 季風險分數趨勢、五維健康度雷達圖、損益表／財務狀況表／現金流量表明細，以及附利多／利空標記的相關新聞。 |
+| **個股詳情** `details.html` | 近 8 季風險分數趨勢、五維健康度雷達圖、損益表／財務狀況表／現金流量表／月營收明細、年報與財報等官方連結、法人說明會（領先指標），以及附利多／利空標記的相關新聞。 |
 | **投資組合健檢** `portfolio.html` | 把 ETF 拆解成底層成分股並與個股持倉加總，算出真實持股比例、產業曝險、ETF 成分重疊度與集中度（HHI）。 |
 | **規則與說明** `rules.html` | 列出所有警訊的判斷條件，以及各產業類型的門檻調整。 |
 
 ### 重點設計
+
+- **同類型公司推薦**：依瀏覽器裡的查詢紀錄（自選股權重 2、其他已查詢 1）統計最常研究的產業，列出同產業、還沒查過的公司；沒有查詢紀錄時，改從查過的 ETF 成分股或其他使用者最近查詢的公司開始。興趣輪廓只在瀏覽器計算，後端只收到產業名稱。推薦只依產業類別，不依燈號或財務表現排序，並附免責聲明，可隨時關閉。點擊率與回饋只記匿名合計（`/api/recommend/stats`）。
 
 - **19 條財報警訊規則**：涵蓋損益表、資產負債表、現金流量表，分為 🔴 紅燈（警戒）與 🟡 黃燈（注意）。
 - **依產業調整門檻**：依證交所產業別自動判斷公司類型（電子、景氣循環、成長、零售、營建、金融……），減少因產業特性造成的誤判；也可在個股詳情手動更改。
@@ -64,6 +66,7 @@ flowchart LR
         N["news.py<br/>新聞"]
         E["etf.py<br/>ETF 成分股"]
         Q["quotes.py<br/>收盤價"]
+        C["mops.py<br/>法說會"]
         M[["記憶體 TTL 快取"]]
     end
 
@@ -71,13 +74,14 @@ flowchart LR
 
     UI <--> LS
     UI -- "REST / JSON" --> S & N & E & Q
-    S & N & E <--> DB
+    S & N & E & C <--> DB
     S & N & E & Q <--> M
 
     S -- 財報・月營收・產業別 --> FM["FinMind API"]
     N --> GN["Google News / Bing News RSS"]
     E --> MD["MoneyDJ"]
     Q --> TW["證交所 / 櫃買中心 OpenAPI"]
+    C -- 每日整批同步 --> MOPS["公開資訊觀測站"]
 ```
 
 ### 資料流與快取策略
@@ -94,7 +98,8 @@ flowchart LR
 - 同一檔股票以獨立的鎖（`LockRegistry`）避免同時重複抓取。
 - FinMind 失敗時暫停該資料集 10 分鐘，並回傳資料庫中的舊資料（標記為 `db-stale`）。
 - Supabase 連不上時（例如免費專案被暫停），改為直接向 FinMind 抓取、不讀寫資料庫（標記為 `finmind-direct`），60 秒內不再嘗試連線資料庫；批次查詢此時每批最多抓 3 檔。
-- GitHub Actions（[.github/workflows/keepalive.yml](.github/workflows/keepalive.yml)）每週一、四呼叫 `/api/health`，喚醒 Render 並查詢一次 Supabase，避免免費專案因 7 天沒有活動被暫停；Supabase 沒連上時工作會失敗，GitHub 會寄信通知。
+- GitHub Actions（[.github/workflows/keepalive.yml](.github/workflows/keepalive.yml)）每天呼叫 `/api/health`，喚醒 Render 並查詢一次 Supabase，避免免費專案因 7 天沒有活動被暫停；Supabase 沒連上時工作會失敗，GitHub 會寄信通知。同一個工作也會觸發法說會同步。
+- 法說會：公開資訊觀測站會封鎖頻繁查詢的 IP，因此不逐檔查詢，而是每天整批抓「市場 × 月份」的全部法說會（當月、下個月，加上補 2 個歷史月份，最多 6 次請求，每次間隔 15 秒）。被封鎖時暫停 24 小時，個股頁改顯示觀測站連結。只保存日期、摘要、簡報檔名與連結，不下載簡報。
 - 資料庫用量超過上限的 85% 時，從最久沒更新的股票開始刪除，降到 75%。
 - 回應附 `ETag`，資料沒變時回傳 `304 Not Modified`。
 
@@ -120,6 +125,8 @@ Financial Statements/
 ├── news.py            # 個股新聞（Google / Bing RSS）與利多／利空判斷
 ├── etf.py             # ETF 成分股（MoneyDJ）
 ├── quotes.py          # 上市櫃全市場收盤價（證交所、櫃買中心）
+├── mops.py            # 法人說明會（公開資訊觀測站，每日整批同步）
+├── recommend.py       # 同類型公司推薦與匿名回饋統計
 ├── common.py          # 共用工具：TTLCache、LockRegistry、管理員驗證、時間處理
 ├── requirements.txt
 │
@@ -133,7 +140,8 @@ Financial Statements/
     ├── app.js         # 共用邏輯：API 位址、自選股、主題、個股頁面
     ├── rules.js       # 警訊規則、產業類型設定、健康度評分
     ├── etf.js         # ETF 顯示與成分股
-    └── portfolio.js   # 投資組合透視計算
+    ├── portfolio.js   # 投資組合透視計算
+    └── recommend.js   # 興趣輪廓（只在瀏覽器計算）與同類型公司推薦
 ```
 
 ---
@@ -214,7 +222,7 @@ python -m http.server 8080
 
 | 資料表 | 主鍵 | 用途 |
 | --- | --- | --- |
-| `raw_finmind` | `stock_id`, `dataset` | FinMind 原始資料（`payload`, `fetched_at`） |
+| `raw_finmind` | `stock_id`, `dataset` | FinMind 原始資料（`payload`, `fetched_at`）；法說會也存在這裡（`stock_id = 'MOPS'`，`dataset` 為 `conf:{市場}:{年-月}` 與同步狀態 `conf:state`） |
 | `stock_results` | `stock_id` | 財報計算結果（`result`, `calc_version`, `complete`, `latest_quarter`, `checked_at`, `updated_at`…） |
 | `monthly_results` | `stock_id` | 月營收計算結果 |
 | `stock_news` | `stock_id` | 新聞快取（`items`, `fetched_at`） |
@@ -252,6 +260,13 @@ python -m http.server 8080
 | `GET` | `/api/news/<stock_id>` | 相關新聞，附利多／利空／中立標記 |
 | `GET` | `/api/etf/<etf_id>` | ETF 成分股與權重 |
 | `GET` | `/api/quotes?ids=0050,2330` | 最近收盤價與產業別，最多 60 檔 |
+| `GET` | `/api/conferences/<stock_id>` | 法人說明會（過去 12 個月、當月與下個月），附同步狀態與收錄範圍 |
+| `GET` | `/api/recommend/peers/<stock_id>` | 同產業公司（已有財報快取的排前面，不依財務表現排序） |
+| `GET` | `/api/recommend/industries?names=半導體業,金融保險` | 依產業名稱列出公司，最多 5 個產業 |
+| `GET` | `/api/recommend/popular` | 其他使用者最近查詢過的個股（新使用者冷啟動用） |
+| `POST` | `/api/recommend/event` | 匿名記錄推薦的曝光、點擊、有幫助／沒幫助（只有事件類型與位置） |
+| `GET` | `/api/recommend/stats?days=30` | 推薦點擊率與回饋統計 |
+| `GET` `POST` | `/api/conferences/sync` | 觸發法說會每日同步（每天最多一次，在背景執行；管理員加 `?force=1` 可強制） |
 
 <details>
 <summary>管理員 API（需 <code>X-Admin-Key</code> 標頭）</summary>
@@ -328,6 +343,7 @@ curl -X POST -H "X-Admin-Key: $ADMIN_KEY" http://127.0.0.1:5000/api/admin/clear-
 - [FinMind](https://finmindtrade.com/)：台股財報、月營收與產業別資料
 - [臺灣證券交易所 OpenAPI](https://openapi.twse.com.tw/)、[證券櫃檯買賣中心 OpenAPI](https://www.tpex.org.tw/openapi/)：收盤價
 - [MoneyDJ](https://www.moneydj.com/)：ETF 成分股
+- [公開資訊觀測站](https://mopsov.twse.com.tw/mops/web/t100sb02_1)：法人說明會一覽表
 - [Chart.js](https://www.chartjs.org/)：圖表
 - README 結構參考 [awesome-readme](https://github.com/matiassingers/awesome-readme) 與 [Standard Readme](https://github.com/RichardLitt/standard-readme)
 

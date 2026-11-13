@@ -637,6 +637,7 @@ function createRiskCell(holding) {
 async function startPreviewMode(stockId, fromEtfId) {
     // fromEtfId 來自網址參數，會被拼進 HTML 與 onclick，不合格式一律丟棄
     const fromPortfolio = fromEtfId === 'portfolio';
+    const fromRec = fromEtfId === 'rec';
     if (!isEtfId(fromEtfId)) fromEtfId = '';
     const banner = document.getElementById('preview-banner');
     const content = document.getElementById('detail-content');
@@ -656,6 +657,8 @@ async function startPreviewMode(stockId, fromEtfId) {
         backLink = `<a href="details.html?id=${fromEtfId}" style="margin-right:16px;">← 返回 ${fromEtfId} 成分股</a>`;
     } else if (fromPortfolio) {
         backLink = `<a href="portfolio.html" style="margin-right:16px;">← 返回投資組合健檢</a>`;
+    } else if (fromRec) {
+        backLink = `<a href="#" onclick="history.back(); return false;" style="margin-right:16px;">← 返回上一頁</a>`;
     }
     
     banner.innerHTML = `

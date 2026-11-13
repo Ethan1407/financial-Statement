@@ -291,6 +291,7 @@ function renderStockOverview() {
   document.getElementById('others-count').textContent = `(${others.count})`;
   document.getElementById('others-grid').innerHTML = others.html;
   ['tracked', 'others'].forEach(applySectionState);
+  if (typeof renderHomeRecommendations === 'function') renderHomeRecommendations();
 }
 
 // 首頁區塊的展開／收合狀態（記在瀏覽器，下次打開維持）
@@ -679,7 +680,131 @@ function loadDetailView(stockId, skipNews = false) {
   setTimeout(() => renderCharts(stockId, analysis.alerts), 0);
   loadMonthly(stockId);
 
-  if (!skipNews) loadNews(stockId);
+  if (!skipNews) {
+      loadNews(stockId);
+      loadConferences(stockId);
+      if (typeof loadDetailPeers === 'function') loadDetailPeers(stockId);
+  }
+}
+
+// ==========================================
+// 🎤 法人說明會（領先指標）：後端每天整批同步一次，這裡只讀取
+// ==========================================
+const CONF_PREVIEW_COUNT = 4;
+let confController = null;
+let currentConfData = null;
+let confExpanded = false;
+
+async function loadConferences(stockId) {
+  const listEl = document.getElementById('conf-list');
+  if (!listEl) return;
+  if (confController) confController.abort();
+  confController = new AbortController();
+  currentConfData = null;
+  confExpanded = false;
+  listEl.innerHTML = '<p style="color:var(--text-light);">法說會資料載入中…</p>';
+  document.getElementById('conf-meta').textContent = '';
+  document.getElementById('conf-more-container').style.display = 'none';
+
+  try {
+      const response = await fetch(`${API_BASE}/api/conferences/${encodeURIComponent(stockId)}`, { signal: confController.signal });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || '法說會資料暫時無法取得');
+      currentConfData = data;
+      renderConferences();
+  } catch (err) {
+      if (err.name === 'AbortError') return;
+      listEl.innerHTML = `<p style="color:var(--text-light);">${escapeHtml(err.message)} <button class="btn-outline" style="margin-left:8px;" onclick="loadConferences('${stockId}')">重試</button></p>`;
+  }
+}
+
+function toggleConfExpand() {
+  confExpanded = !confExpanded;
+  renderConferences();
+}
+
+// 觀測站的簡報下載是送出表單（POST），不是一般網址。由使用者的瀏覽器送出與觀測站頁面相同的表單，
+// 在新分頁開啟官方檔案；本站不經手、也不保存檔案。
+const MOPS_FILE_RE = /^[A-Za-z0-9_-]+\.(pdf|pptx?|PDF|PPTX?)$/;
+function openMopsSlide(fileName) {
+  if (!MOPS_FILE_RE.test(fileName)) return;
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = 'https://mopsov.twse.com.tw/server-java/FileDownLoad';
+  form.target = '_blank';
+  const fields = { step: '9', filePath: '/home/html/nas/STR/', fileName, functionName: 't100sb02_1' };
+  Object.entries(fields).forEach(([name, value]) => {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = name;
+      input.value = value;
+      form.appendChild(input);
+  });
+  document.body.appendChild(form);
+  form.submit();
+  form.remove();
+}
+
+function safeHttpUrl(url) {
+  return /^https?:\/\//i.test(url || '') ? url : null;
+}
+
+function confItemHtml(item, isUpcoming) {
+  const links = (item.links || []).map(l => {
+      const url = safeHttpUrl(l.url);
+      return url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label)} ↗</a>` : '';
+  }).join('');
+  const slideLink = (file, label) => file && MOPS_FILE_RE.test(file)
+      ? `<a href="#" onclick="openMopsSlide('${file}'); return false;" title="${escapeHtml(file)}">${label} ↗</a>` : '';
+  const files = [slideLink(item.fileZh, '中文簡報'), slideLink(item.fileEn, '英文簡報')].filter(Boolean).join('');
+  return `
+    <div class="conf-item${isUpcoming ? ' upcoming' : ''}">
+      <div class="conf-head">
+        ${isUpcoming ? '<span class="badge" style="background:var(--primary);">即將舉行</span>' : ''}
+        <span class="conf-date">${escapeHtml(item.dateText || item.date)} ${escapeHtml(item.time || '')}</span>
+        <span class="conf-place">${escapeHtml(item.place || '')}</span>
+      </div>
+      <div class="conf-summary">${escapeHtml(item.summary || '')}</div>
+      ${item.note ? `<div class="conf-place" style="margin-top:4px;">備註：${escapeHtml(item.note)}</div>` : ''}
+      <div class="conf-links">
+        ${files}
+        ${links}
+      </div>
+    </div>`;
+}
+
+function renderConferences() {
+  const listEl = document.getElementById('conf-list');
+  const metaEl = document.getElementById('conf-meta');
+  const moreContainer = document.getElementById('conf-more-container');
+  const data = currentConfData;
+  if (!listEl || !data) return;
+
+  const coverage = data.coverage ? `收錄 ${data.coverage.from} ～ ${data.coverage.to}` : '';
+  const synced = data.lastSuccessAt ? `更新於 ${formatDateTime(data.lastSuccessAt)}` : '';
+  metaEl.textContent = [coverage, synced].filter(Boolean).join('｜');
+
+  const items = data.items || [];
+  if (!items.length) {
+      moreContainer.style.display = 'none';
+      const reason = data.status === 'blocked' || data.status === 'error'
+          ? '法說會資料來源暫時無法連線，系統會自動稍後再試。'
+          : (data.status === 'never' ? '法說會資料首次同步中，請稍後再回來看看。' : '收錄期間內沒有這家公司的法說會紀錄。');
+      listEl.innerHTML = `<p style="color:var(--text-light);">${reason}可以直接到 <a href="${escapeHtml(data.sourceUrl || 'https://mopsov.twse.com.tw/mops/web/t100sb02_1')}" target="_blank" rel="noopener noreferrer">公開資訊觀測站</a> 查詢。</p>`;
+      return;
+  }
+
+  // 依台灣日期判斷是否尚未舉行（多日活動以結束日為準）
+  const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+  const isUpcoming = item => (item.endDate || item.date) >= today;
+  const upcoming = items.filter(isUpcoming).reverse();  // 最近的排前面
+  const past = items.filter(item => !isUpcoming(item));
+  const ordered = [...upcoming, ...past];
+  const shown = confExpanded ? ordered : ordered.slice(0, Math.max(CONF_PREVIEW_COUNT, upcoming.length));
+
+  listEl.innerHTML = shown.map(item => confItemHtml(item, isUpcoming(item))).join('');
+  moreContainer.style.display = ordered.length > shown.length || confExpanded ? 'block' : 'none';
+  document.getElementById('conf-more-btn').textContent = confExpanded ? '收合' : `顯示全部 ${ordered.length} 場`;
 }
 
 // ==========================================

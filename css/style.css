@@ -220,3 +220,27 @@ th { background-color: rgba(0,0,0,0.02); color: var(--text-light); font-weight: 
 .link-item:hover { border-color: var(--primary); }
 .link-item strong { display: block; margin-bottom: 4px; color: var(--primary); }
 .link-item span { font-size: 0.85rem; color: var(--text-light); line-height: 1.4; }
+
+/* ================= 法人說明會 ================= */
+.data-tag { font-size: 0.75rem; font-weight: normal; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--text-light); }
+.data-tag.leading { color: var(--primary); border-color: var(--primary); }
+.conf-item { padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); margin-bottom: 8px; }
+.conf-item.upcoming { border-left: 4px solid var(--primary); }
+.conf-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
+.conf-date { font-weight: bold; }
+.conf-place { font-size: 0.85rem; color: var(--text-light); }
+.conf-summary { font-size: 0.9rem; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere; }
+.conf-links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 0.85rem; color: var(--text-light); }
+
+/* ================= 同類型公司推薦 ================= */
+.rec-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-top: 8px; }
+.rec-group { margin-top: 16px; }
+.rec-group h4 { margin: 0; }
+.rec-card { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text); transition: 0.2s; }
+.rec-card:hover { border-color: var(--primary); }
+.rec-card strong { color: var(--primary); }
+.rec-card span { font-size: 0.85rem; color: var(--text-light); }
+.rec-card .rec-speed { font-size: 0.75rem; }
+.rec-feedback { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; font-size: 0.9rem; color: var(--text-light); }
+.rec-disclaimer { margin-top: 12px; font-size: 0.8rem; color: var(--text-light); line-height: 1.5; }
+button.btn-link { background: transparent; color: var(--primary); padding: 0 4px; font-weight: normal; text-decoration: underline; }

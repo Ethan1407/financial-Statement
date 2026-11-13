@@ -77,16 +77,7 @@
         <div id="detail-alerts-summary" style="margin-top: 12px; font-size: 0.9rem;"></div>
       </div>
 
-      <!-- 官方資料連結：只放連結、導向官方來源，不下載或保存檔案 -->
-      <div class="card" id="links-card" style="margin-bottom: 16px;">
-        <div class="flex-between" style="margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
-          <h3 style="margin: 0;">🔗 官方資料連結</h3>
-          <span style="font-size: 0.85rem; color: var(--text-light);">連到證交所、公開資訊觀測站官方頁面</span>
-        </div>
-        <div id="official-links" class="link-grid"></div>
-      </div>
-
-      <!-- ================= 相關新聞區塊 (搬移至此) ================= -->
+      <!-- ================= 相關新聞區塊 ================= -->
       <div class="card" id="news-card" style="margin-bottom: 16px;">
         <div class="flex-between" style="margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
           <h3 style="margin: 0;">📰 相關新聞</h3>
@@ -120,6 +111,40 @@
         </div>
       </div>
       <!-- ================= 新聞區塊結束 ================= -->
+
+      <!-- 官方資料連結：只放連結、導向官方來源，不下載或保存檔案 -->
+      <div class="card" id="links-card" style="margin-bottom: 16px;">
+        <div class="flex-between" style="margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+          <h3 style="margin: 0;">🔗 官方資料連結</h3>
+          <span style="font-size: 0.85rem; color: var(--text-light);">連到證交所、公開資訊觀測站官方頁面</span>
+        </div>
+        <div id="official-links" class="link-grid"></div>
+      </div>
+
+      <!-- 法人說明會（領先指標）：只整理日期與連結，不對內容評分 -->
+      <div class="card" id="conf-card" style="margin-bottom: 16px;">
+        <div class="flex-between" style="margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+          <h3 style="margin: 0; display:flex; align-items:center; gap:8px;">🎤 法人說明會 <span class="data-tag leading">領先指標</span></h3>
+          <span id="conf-meta" style="font-size: 0.85rem; color: var(--text-light);"></span>
+        </div>
+        <div id="conf-list"><p style="color:var(--text-light);">法說會資料載入中…</p></div>
+        <div id="conf-more-container" style="margin-top: 12px; text-align: center; display: none;">
+          <button id="conf-more-btn" class="btn-outline" style="min-height: 40px; width: 100%; max-width: 300px;" onclick="toggleConfExpand()">顯示全部</button>
+        </div>
+        <div style="margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--border); font-size: 0.8rem; color: var(--text-light); line-height: 1.5;">
+          法說會是公司對未來營運的說明，屬於領先指標；財報與月營收則是落後指標。本區只整理日期、摘要與官方連結，不對內容自動評分。
+          點「中文簡報／英文簡報」會在新分頁開啟觀測站的官方檔案；若無法開啟，請至<a href="https://mopsov.twse.com.tw/mops/web/t100sb02_1" target="_blank" rel="noopener noreferrer">公開資訊觀測站</a>輸入代號下載。
+        </div>
+      </div>
+
+
+      <!-- 同類型公司（階段五）：只依產業類別，不依財務表現排序 -->
+      <div class="card" id="peers-card" style="margin-bottom: 16px;">
+        <h3 style="margin: 0 0 8px 0;">🔍 同類型公司</h3>
+        <p class="section-hint" id="peers-reason"></p>
+        <div id="peers-list"></div>
+        <div id="peers-footer"></div>
+      </div>
 
       <!-- 健康度雷達圖 -->
       <div class="card" id="radar-card" style="margin-bottom: 16px;">
@@ -197,6 +222,7 @@
   <script src="js/rules.js"></script>
   <script src="js/app.js"></script>
   <script src="js/etf.js"></script>
+  <script src="js/recommend.js"></script>
   <script> initDetails(); </script>
 </body>
 </html>
