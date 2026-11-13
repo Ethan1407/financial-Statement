@@ -1,8 +1,10 @@
 """法人說明會（公開資訊觀測站「法人說明會一覽表」t100sb02_1）
 
-觀測站對頻繁查詢會封鎖 IP，因此這裡不逐檔查詢，而是整批抓「某市場某月份」的全部法說會：
-- 每天最多同步一次：當月、下個月（已公告的未來法說會）各市場一次，再補 2 個歷史月份，
-  總共最多 6 次請求，每次間隔 REQUEST_GAP_SECONDS 秒。
+觀測站對頻繁查詢會封鎖 IP（實測 Render 連續第 2 個請求就被切斷），因此：
+- 不逐檔查詢，而是整批抓「某市場某月份」的全部法說會。
+- 每次同步只送 1 個請求，兩次請求至少相隔 REQUEST_INTERVAL_SECONDS 秒（1 小時）。
+  優先順序：當月上市 → 當月上櫃 → 下月上市 → 下月上櫃（每天各更新一次）→ 補過去 12 個月。
+- 觸發來源：GitHub Actions 每 2 小時一次，以及使用者瀏覽個股頁時順便觸發。
 - 被封鎖（伺服器不回應、安全性頁面）時暫停 BLOCK_BACKOFF_HOURS 小時，其他錯誤暫停 ERROR_BACKOFF_HOURS 小時。
 - 只保存日期、摘要、簡報檔名與連結，不下載簡報檔案。資料存在 raw_finmind（stock_id = "MOPS"）。
 """
@@ -27,8 +29,7 @@ MARKETS = ("sii", "otc")          # 上市、上櫃
 STORE_ID = "MOPS"                 # raw_finmind.stock_id
 STATE_DATASET = "conf:state"
 BACKFILL_MONTHS = 12              # 保留過去 12 個月
-BACKFILL_PER_RUN = 2              # 每次同步最多補幾個歷史月份（市場×月份算一個）
-REQUEST_GAP_SECONDS = 15
+REQUEST_INTERVAL_SECONDS = 3600  # 兩次請求的最短間隔
 BLOCK_BACKOFF_HOURS = 24
 ERROR_BACKOFF_HOURS = 3
 TW_TZ = timezone(timedelta(hours=8))
@@ -162,7 +163,7 @@ class ConferenceStore:
     def __init__(self, supabase=None):
         self.supabase = supabase
         self.months = {}      # dataset -> {"items": [...], "fetched_at": iso}
-        self.state = {}       # last_run_date, last_success_at, status, message, blocked_until
+        self.state = {}       # last_request_at, last_success_at, status, message, blocked_until
         self.loaded = False
         self.load_lock = threading.Lock()
         self.sync_lock = threading.Lock()
@@ -209,34 +210,50 @@ class ConferenceStore:
                 print(f"[MOPS] 刪除過期月份失敗: {e}")
 
     # ---------- 同步 ----------
-    def plan(self, now=None):
-        """回傳這次同步要抓的 (market, year, month) 清單，以及要保留的月份資料集"""
+    def _fetched_date(self, ds):
+        stored = self.months.get(ds)
+        return safe_parse_iso(stored["fetched_at"]).astimezone(TW_TZ).date() if stored else None
+
+    def keep_datasets(self, now=None):
+        """要保留的月份：過去 BACKFILL_MONTHS 個月、當月、下個月"""
         now = now or _tw_now()
         cur = (now.year, now.month)
-        nxt = _shift(*cur, 1)
-        jobs = [(mk, *cur) for mk in MARKETS] + [(mk, *nxt) for mk in MARKETS]
-        keep = {_dataset(mk, y, m) for mk, y, m in jobs}
+        months = [_shift(*cur, d) for d in range(-BACKFILL_MONTHS, 2)]
+        return {_dataset(mk, y, m) for (y, m) in months for mk in MARKETS}
 
-        backfill = []
+    def next_job(self, now=None):
+        """下一個要抓的 (market, year, month)；都已是最新時回傳 None"""
+        now = now or _tw_now()
+        today = now.date()
+        cur = (now.year, now.month)
+        nxt = _shift(*cur, 1)
+        # 當月與下個月：每天更新一次（新公告的法說會會陸續加入）
+        for (y, m) in (cur, nxt):
+            for mk in MARKETS:
+                if self._fetched_date(_dataset(mk, y, m)) != today:
+                    return (mk, y, m)
+        # 過去的月份：沒抓過，或在該月結束前抓的（月底後可能還有補登），都再抓一次
         for back in range(1, BACKFILL_MONTHS + 1):
             y, m = _shift(*cur, -back)
             for mk in MARKETS:
-                ds = _dataset(mk, y, m)
-                keep.add(ds)
-                stored = self.months.get(ds)
-                # 沒抓過，或是在該月結束前抓的（月底後可能還有補登），都要再抓一次
-                fetched_tw = safe_parse_iso(stored["fetched_at"]).astimezone(TW_TZ).date() if stored else None
-                if fetched_tw is None or fetched_tw <= _month_end_date(y, m):
-                    backfill.append((mk, y, m))
-        return jobs + backfill[:BACKFILL_PER_RUN], keep
+                fetched = self._fetched_date(_dataset(mk, y, m))
+                if fetched is None or fetched <= _month_end_date(y, m):
+                    return (mk, y, m)
+        return None
+
+    def _next_allowed_at(self):
+        last = self.state.get("last_request_at")
+        return safe_parse_iso(last) + timedelta(seconds=REQUEST_INTERVAL_SECONDS) if last else None
 
     def status(self):
         self._ensure_loaded()
         months = sorted({ds.split(":")[2] for ds in self.months})
+        next_allowed = self._next_allowed_at()
         return {
             "status": self.state.get("status", "never"),
             "message": self.state.get("message"),
-            "lastRunDate": self.state.get("last_run_date"),
+            "lastRequestAt": self.state.get("last_request_at"),
+            "nextAllowedAt": next_allowed.replace(tzinfo=None).isoformat() + "Z" if next_allowed else None,
             "lastSuccessAt": self.state.get("last_success_at"),
             "blockedUntil": self.state.get("blocked_until"),
             "coverage": {"from": months[0], "to": months[-1]} if months else None,
@@ -244,50 +261,48 @@ class ConferenceStore:
         }
 
     def start_sync(self, force=False):
-        """每天最多同步一次（管理員 force 可略過），在背景執行緒進行，立即回傳目前狀態"""
+        """每次只送 1 個請求、兩次至少相隔 1 小時（管理員 force 可略過），在背景執行，立即回傳目前狀態"""
         self._ensure_loaded()
         if not SYNC_ENABLED:
             return {"started": False, "reason": "此環境未啟用同步（只讀取資料）", **self.status()}
-        now = _tw_now()
-        today = now.strftime("%Y-%m-%d")
-        blocked_until = self.state.get("blocked_until")
+        now_utc = datetime.now(timezone.utc)
         if not force:
-            if blocked_until and safe_parse_iso(blocked_until) > datetime.now(timezone.utc):
+            blocked_until = self.state.get("blocked_until")
+            if blocked_until and safe_parse_iso(blocked_until) > now_utc:
                 return {"started": False, "reason": "觀測站暫停中", **self.status()}
-            if self.state.get("last_run_date") == today:
-                return {"started": False, "reason": "今天已同步過", **self.status()}
+            next_allowed = self._next_allowed_at()
+            if next_allowed and next_allowed > now_utc:
+                return {"started": False, "reason": "距離上次請求未滿 1 小時", **self.status()}
+        now = _tw_now()
+        job = self.next_job(now)
+        if job is None:
+            return {"started": False, "reason": "資料都是最新的", **self.status()}
         if not self.sync_lock.acquire(blocking=False):
             return {"started": False, "reason": "同步進行中", **self.status()}
-        # 先記下今天已執行，避免同時湧入的請求重複觸發
-        self.state["last_run_date"] = today
-        threading.Thread(target=self._run_sync, args=(now,), daemon=True).start()
-        return {"started": True, **self.status()}
+        # 先記下請求時間，避免同時湧入的請求重複觸發
+        self.state["last_request_at"] = get_iso_now()
+        threading.Thread(target=self._run_sync, args=(job, self.keep_datasets(now)), daemon=True).start()
+        return {"started": True, "job": _dataset(*job), **self.status()}
 
-    def _run_sync(self, now):
+    def _run_sync(self, job, keep):
+        mk, y, m = job
+        ds = _dataset(mk, y, m)
         try:
-            jobs, keep = self.plan(now)
-            done, items_total = 0, 0
-            for i, (mk, y, m) in enumerate(jobs):
-                if i:
-                    time.sleep(REQUEST_GAP_SECONDS)
-                items = fetch_month(mk, y, m)
-                ds = _dataset(mk, y, m)
-                self.months[ds] = {"items": items, "fetched_at": get_iso_now()}
-                self._save(ds, items)
-                done += 1
-                items_total += len(items)
+            items = fetch_month(mk, y, m)
+            self.months[ds] = {"items": items, "fetched_at": get_iso_now()}
+            self._save(ds, items)
             self._prune(keep)
-            self.state.update({"status": "ok", "message": f"同步 {done} 個月份、{items_total} 筆",
+            self.state.update({"status": "ok", "message": f"已更新 {ds}（{len(items)} 筆）",
                                "last_success_at": get_iso_now(), "blocked_until": None})
-            print(f"[MOPS] 法說會同步完成：{done} 個月份、{items_total} 筆")
+            print(f"[MOPS] 法說會已更新 {ds}：{len(items)} 筆")
         except MopsError as e:
             hours = BLOCK_BACKOFF_HOURS if e.blocked else ERROR_BACKOFF_HOURS
             until = (datetime.now(timezone.utc) + timedelta(hours=hours)).replace(tzinfo=None).isoformat() + "Z"
-            self.state.update({"status": "blocked" if e.blocked else "error", "message": str(e), "blocked_until": until})
-            print(f"[MOPS] 法說會同步中止：{e}，暫停 {hours} 小時")
+            self.state.update({"status": "blocked" if e.blocked else "error", "message": f"{ds}：{e}", "blocked_until": until})
+            print(f"[MOPS] 法說會同步中止（{ds}）：{e}，暫停 {hours} 小時")
         except Exception as e:
-            self.state.update({"status": "error", "message": type(e).__name__})
-            print(f"[MOPS] 法說會同步發生例外: {e}")
+            self.state.update({"status": "error", "message": f"{ds}：{type(e).__name__}"})
+            print(f"[MOPS] 法說會同步發生例外（{ds}）: {e}")
         finally:
             self.index_cache.clear()
             self._save(STATE_DATASET, self.state)

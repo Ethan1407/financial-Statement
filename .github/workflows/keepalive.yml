@@ -1,13 +1,13 @@
-# 每天呼叫後端兩個端點：
+# 每 2 小時呼叫後端兩個端點：
 # 1. /api/health：喚醒 Render，並讓後端實際查詢一次 Supabase，避免免費方案因 7 天沒有活動被暫停。
 #    Supabase 沒連上時這個工作會失敗，GitHub 會寄信通知儲存庫擁有者。
-# 2. /api/conferences/sync：觸發法說會每日同步（後端自己限制每天最多一次、在背景執行）。
-#    這一步失敗只會顯示警告，不會讓工作失敗。
+# 2. /api/conferences/sync：觸發法說會同步。後端每次只向觀測站送 1 個請求，且兩次至少相隔 1 小時，
+#    所以每 2 小時觸發一次，一天最多 12 個請求。這一步失敗只會顯示警告，不會讓工作失敗。
 name: Supabase keep-alive
 
 on:
   schedule:
-    - cron: '0 1 * * *'     # 每天 01:00 UTC（台灣時間 09:00）
+    - cron: '17 */2 * * *'  # 每 2 小時一次（避開整點，GitHub 整點排程容易延遲）
   workflow_dispatch:         # 也可以在 GitHub 的 Actions 頁面手動執行
 
 jobs:
@@ -48,7 +48,7 @@ jobs:
           else
             echo "::warning::法說會同步端點沒有回應"
           fi
-          # 同步在背景進行（約 1～2 分鐘），等一下再看結果（今天已同步過，不會重複觸發）
-          sleep 120
+          # 同步在背景進行（只有 1 個請求），等一下再看結果（未滿 1 小時，不會重複觸發）
+          sleep 30
           curl -sS --max-time 60 "$API_BASE/api/conferences/sync" || true
           echo

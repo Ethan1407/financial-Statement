@@ -98,8 +98,8 @@ flowchart LR
 - 同一檔股票以獨立的鎖（`LockRegistry`）避免同時重複抓取。
 - FinMind 失敗時暫停該資料集 10 分鐘，並回傳資料庫中的舊資料（標記為 `db-stale`）。
 - Supabase 連不上時（例如免費專案被暫停），改為直接向 FinMind 抓取、不讀寫資料庫（標記為 `finmind-direct`），60 秒內不再嘗試連線資料庫；批次查詢此時每批最多抓 3 檔。
-- GitHub Actions（[.github/workflows/keepalive.yml](.github/workflows/keepalive.yml)）每天呼叫 `/api/health`，喚醒 Render 並查詢一次 Supabase，避免免費專案因 7 天沒有活動被暫停；Supabase 沒連上時工作會失敗，GitHub 會寄信通知。同一個工作也會觸發法說會同步。
-- 法說會：公開資訊觀測站會封鎖頻繁查詢的 IP，因此不逐檔查詢，而是每天整批抓「市場 × 月份」的全部法說會（當月、下個月，加上補 2 個歷史月份，最多 6 次請求，每次間隔 15 秒）。被封鎖時暫停 24 小時，個股頁改顯示觀測站連結。只保存日期、摘要、簡報檔名與連結，不下載簡報。
+- GitHub Actions（[.github/workflows/keepalive.yml](.github/workflows/keepalive.yml)）每 2 小時呼叫 `/api/health`，喚醒 Render 並查詢一次 Supabase，避免免費專案因 7 天沒有活動被暫停；Supabase 沒連上時工作會失敗，GitHub 會寄信通知。同一個工作也會觸發法說會同步。
+- 法說會：公開資訊觀測站會封鎖頻繁查詢的 IP（實測 Render 連續第 2 個請求就被切斷），因此不逐檔查詢，而是整批抓「市場 × 月份」的全部法說會，且**每次只送 1 個請求、兩次至少相隔 1 小時**。順序為當月上市、當月上櫃、下月上市、下月上櫃（每天各更新一次），再補過去 12 個月（約 3 天補齊）。被封鎖時暫停 24 小時。同步只在 Render 上執行，本機只讀資料。只保存日期、摘要、簡報檔名與連結，不下載簡報。
 - 資料庫用量超過上限的 85% 時，從最久沒更新的股票開始刪除，降到 75%。
 - 回應附 `ETag`，資料沒變時回傳 `304 Not Modified`。
 
@@ -266,7 +266,7 @@ python -m http.server 8080
 | `GET` | `/api/recommend/popular` | 其他使用者最近查詢過的個股（新使用者冷啟動用） |
 | `POST` | `/api/recommend/event` | 匿名記錄推薦的曝光、點擊、有幫助／沒幫助（只有事件類型與位置） |
 | `GET` | `/api/recommend/stats?days=30` | 推薦點擊率與回饋統計 |
-| `GET` `POST` | `/api/conferences/sync` | 觸發法說會每日同步（每天最多一次，在背景執行；管理員加 `?force=1` 可強制） |
+| `GET` `POST` | `/api/conferences/sync` | 觸發法說會同步（每次 1 個請求、至少相隔 1 小時，在背景執行；管理員加 `?force=1` 可強制） |
 
 <details>
 <summary>管理員 API（需 <code>X-Admin-Key</code> 標頭）</summary>
