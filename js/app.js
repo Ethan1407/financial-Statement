@@ -1471,7 +1471,8 @@ function renderCharts(stockId, alerts = []) {
           radarContainer.style.display = 'flex';
           radarMsg.style.display = 'none';
           
-          const myScores = calcHealthScores(data);
+          const breakdown = calcHealthBreakdown(data);
+          const myScores = breakdown.scores;
           const dims = ['獲利力', '成長力', '償債力', '現金流品質', '營運效率'];
           
           let peerScores = [SCORE_CONFIG.baseline, SCORE_CONFIG.baseline, SCORE_CONFIG.baseline, SCORE_CONFIG.baseline, SCORE_CONFIG.baseline];
@@ -1499,11 +1500,12 @@ function renderCharts(stockId, alerts = []) {
           dims.forEach((d, i) => {
               let sVal = myScores[i] == null ? '資料不足' : `${myScores[i]} 分`;
               let color = myScores[i] == null ? 'var(--text-light)' : (myScores[i] < 40 ? 'var(--red)' : (myScores[i] > 70 ? 'var(--green)' : 'var(--text)'));
-              slHtml += `<div style="display:flex; justify-content:space-between; margin-bottom:8px;">
-                  <span>${d}</span> <strong style="color:${color}">${sVal}</strong>
+              slHtml += `<div style="margin-bottom:10px;">
+                  <div style="display:flex; justify-content:space-between;"><span>${d}</span> <strong style="color:${color}">${sVal}</strong></div>
+                  ${breakdown.notes[i] ? `<div style="font-size:0.78rem; color:var(--text-light); margin-top:2px;">${escapeHtml(breakdown.notes[i])}</div>` : ''}
               </div>`;
           });
-          slHtml += `<p style="font-size:0.8rem; color:var(--text-light); margin-top:16px;">*分數僅為相對參考，並非投資評等</p>`;
+          slHtml += `<p style="font-size:0.8rem; color:var(--text-light); margin-top:16px; line-height:1.5;">*獲利、成長、現金流依近 4 季合計計算，償債力用最新一季。100 分代表在台股中屬於很突出的水準。分數僅為相對參考，並非投資評等。</p>`;
           scoreList.innerHTML = slHtml;
 
           if(currentCharts['chart-radar']) currentCharts['chart-radar'].destroy();

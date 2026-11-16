@@ -13,54 +13,108 @@ const INDUSTRY_TO_TYPE = {
 // ==========================================
 // 2. 雷達圖評分區間設定 (SCORE_CONFIG)
 // ==========================================
+// 五大構面健康度（雷達圖）。分數 0～100，依 [得 0 分的值, 得 100 分的值] 線性換算，超出範圍截在 0 或 100。
+// 設計原則（避免分數虛高）：
+// - 損益與現金流用「近 4 季合計」計算，不被單一季的暴增或暴跌左右；資產負債表本來就是時點數字，用最新一季。
+// - 門檻設得較嚴，100 分代表在台股中屬於很突出的水準，而不是「及格」。
+// - 沒有存貨（存貨天數為 0）代表不適用，不當成週轉最快而給滿分。
 const SCORE_CONFIG = {
     baseline: 60,
-    profit: { gross: [0, 40], op: [0, 20] },
-    growth: { yoy: [0, 30] },
-    solvency: { debt: [80, 30], current: [0.8, 2.0] },
-    cf: { op: [0, 20], free: [0, 10] },
-    efficiency: { ar: [150, 30], inv: [150, 30] }
+    window: 4,                                   // 近幾季合計
+    profit: { gross: [0, 50], op: [0, 25] },     // 毛利率 50%、營益率 25% 才滿分
+    growth: { yoy: [-20, 30] },                  // 年減 20% 為 0 分、持平約 40 分、年增 30% 滿分
+    solvency: { debt: [80, 30], current: [1.0, 2.5] },
+    cf: { op: [0, 30], free: [0, 20] },          // 營業現金流佔營收 30%、自由現金流佔營收 20% 才滿分
+    efficiency: { ar: [120, 30], inv: [180, 30] }
 };
 
-function calcHealthScores(quarterData) {
-    if (!quarterData || quarterData.length === 0) return [null, null, null, null, null];
+// 回傳 { scores: [獲利, 成長, 償債, 現金流, 效率], notes: [每個構面的計算依據] }
+function calcHealthBreakdown(quarterData) {
+    const empty = { scores: [null, null, null, null, null], notes: ['', '', '', '', ''] };
+    if (!quarterData || quarterData.length === 0) return empty;
     const latest = quarterData[quarterData.length - 1];
+    const recent = quarterData.slice(-SCORE_CONFIG.window);
+    const n = recent.length;
+    const ok = v => v != null && !isNaN(v);
+    const pct = v => `${Math.round(v * 10) / 10}%`;
 
-    // 加入 isNaN 防呆，且使用 == null 相容 undefined
     const mapScore = (val, minV, maxV) => {
-        if (val == null || isNaN(val)) return null;
+        if (!ok(val)) return null;
         let p = (val - minV) / (maxV - minV);
-        if (p < 0) p = 0;
-        if (p > 1) p = 1;
-        return p * 100;
+        return Math.min(Math.max(p, 0), 1) * 100;
     };
-
     const avg = (arr) => {
-        let valid = arr.filter(v => v != null);
+        const valid = arr.filter(v => v != null);
         if (valid.length === 0) return null;
         return Math.round(valid.reduce((a, b) => a + b, 0) / valid.length);
     };
+    // 近 N 季「以營收加權」的比率：Σ(營收 × 比率) ÷ Σ營收，等同用合計數字算比率
+    const weighted = (key) => {
+        const qs = recent.filter(q => ok(q[key]) && ok(q.revenue) && q.revenue > 0);
+        const rev = qs.reduce((a, q) => a + q.revenue, 0);
+        return rev > 0 ? qs.reduce((a, q) => a + q.revenue * q[key], 0) / rev : null;
+    };
+    // 近 N 季合計金額 ÷ 合計營收
+    const sumRatio = (key) => {
+        const qs = recent.filter(q => ok(q[key]) && ok(q.revenue));
+        const rev = qs.reduce((a, q) => a + q.revenue, 0);
+        return rev > 0 ? qs.reduce((a, q) => a + q[key], 0) / rev * 100 : null;
+    };
 
-    let p_gross = mapScore(latest.grossMargin, SCORE_CONFIG.profit.gross[0], SCORE_CONFIG.profit.gross[1]);
-    let p_op = mapScore(latest.operatingMargin, SCORE_CONFIG.profit.op[0], SCORE_CONFIG.profit.op[1]);
-    let profitScore = avg([p_gross, p_op]);
+    // 獲利力：近 N 季毛利率、營益率
+    const gm = weighted('grossMargin');
+    const om = weighted('operatingMargin');
+    const profitScore = avg([mapScore(gm, ...SCORE_CONFIG.profit.gross), mapScore(om, ...SCORE_CONFIG.profit.op)]);
+    const profitNote = [ok(gm) && `毛利率 ${pct(gm)}`, ok(om) && `營益率 ${pct(om)}`].filter(Boolean).join('、');
 
-    let growthScore = mapScore(latest.revenueYoY, SCORE_CONFIG.growth.yoy[0], SCORE_CONFIG.growth.yoy[1]);
-    if (growthScore != null) growthScore = Math.round(growthScore);
+    // 成長力：有 8 季營收時用「近 4 季合計 vs 前 4 季合計」，否則用近幾季年增率平均
+    let yoy = null, growthBasis = '';
+    const revs = quarterData.slice(-SCORE_CONFIG.window * 2).map(q => q.revenue);
+    if (revs.length === SCORE_CONFIG.window * 2 && revs.every(v => ok(v))) {
+        const cur = revs.slice(SCORE_CONFIG.window).reduce((a, b) => a + b, 0);
+        const prev = revs.slice(0, SCORE_CONFIG.window).reduce((a, b) => a + b, 0);
+        if (prev > 0) { yoy = (cur / prev - 1) * 100; growthBasis = '近 4 季營收合計年增'; }
+    }
+    if (yoy == null) {
+        const ys = recent.map(q => q.revenueYoY).filter(ok);
+        if (ys.length) { yoy = ys.reduce((a, b) => a + b, 0) / ys.length; growthBasis = `近 ${ys.length} 季營收年增率平均`; }
+    }
+    const growthRaw = mapScore(yoy, ...SCORE_CONFIG.growth.yoy);
+    const growthScore = growthRaw == null ? null : Math.round(growthRaw);
+    const growthNote = ok(yoy) ? `${growthBasis} ${pct(yoy)}` : '';
 
-    let s_debt = mapScore(latest.debtRatio, SCORE_CONFIG.solvency.debt[0], SCORE_CONFIG.solvency.debt[1]);
-    let s_current = mapScore(latest.currentRatio, SCORE_CONFIG.solvency.current[0], SCORE_CONFIG.solvency.current[1]);
-    let solvencyScore = avg([s_debt, s_current]);
+    // 償債力：最新一季負債比、流動比
+    const solvencyScore = avg([mapScore(latest.debtRatio, ...SCORE_CONFIG.solvency.debt), mapScore(latest.currentRatio, ...SCORE_CONFIG.solvency.current)]);
+    const solvencyNote = [ok(latest.debtRatio) && `負債比 ${pct(latest.debtRatio)}`, ok(latest.currentRatio) && `流動比 ${latest.currentRatio}`].filter(Boolean).join('、');
 
-    let cf_op = (latest.revenue > 0 && latest.operatingCF != null) ? mapScore(latest.operatingCF / latest.revenue * 100, SCORE_CONFIG.cf.op[0], SCORE_CONFIG.cf.op[1]) : null;
-    let cf_free = (latest.revenue > 0 && latest.freeCF != null) ? mapScore(latest.freeCF / latest.revenue * 100, SCORE_CONFIG.cf.free[0], SCORE_CONFIG.cf.free[1]) : null;
-    let cfScore = avg([cf_op, cf_free]);
+    // 現金流品質：近 N 季營業現金流、自由現金流合計 ÷ 營收合計
+    const ocf = sumRatio('operatingCF');
+    const fcf = sumRatio('freeCF');
+    const cfScore = avg([mapScore(ocf, ...SCORE_CONFIG.cf.op), mapScore(fcf, ...SCORE_CONFIG.cf.free)]);
+    const cfNote = [ok(ocf) && `營業現金流／營收 ${pct(ocf)}`, ok(fcf) && `自由現金流／營收 ${pct(fcf)}`].filter(Boolean).join('、');
 
-    let e_ar = mapScore(latest.arDays, SCORE_CONFIG.efficiency.ar[0], SCORE_CONFIG.efficiency.ar[1]);
-    let e_inv = mapScore(latest.invDays, SCORE_CONFIG.efficiency.inv[0], SCORE_CONFIG.efficiency.inv[1]);
-    let effScore = avg([e_ar, e_inv]);
+    // 營運效率：近 N 季應收天數、存貨天數平均（存貨天數為 0 代表沒有存貨，不計分）
+    const avgOf = (key, filter) => { const v = recent.map(q => q[key]).filter(x => ok(x) && filter(x)); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+    const ar = avgOf('arDays', () => true);
+    const inv = avgOf('invDays', x => x > 0);
+    const effScore = avg([mapScore(ar, ...SCORE_CONFIG.efficiency.ar), mapScore(inv, ...SCORE_CONFIG.efficiency.inv)]);
+    const effNote = [ok(ar) && `應收 ${Math.round(ar)} 天`, ok(inv) ? `存貨 ${Math.round(inv)} 天` : '無存貨（不計）'].filter(Boolean).join('、');
 
-    return [profitScore, growthScore, solvencyScore, cfScore, effScore];
+    const windowNote = `近 ${n} 季`;
+    return {
+        scores: [profitScore, growthScore, solvencyScore, cfScore, effScore],
+        notes: [
+            profitNote && `${windowNote}${profitNote}`,
+            growthNote,
+            solvencyNote && `最新一季${solvencyNote}`,
+            cfNote && `${windowNote}${cfNote}`,
+            effNote && `${windowNote}平均${effNote}`
+        ]
+    };
+}
+
+function calcHealthScores(quarterData) {
+    return calcHealthBreakdown(quarterData).scores;
 }
 
 // ==========================================
