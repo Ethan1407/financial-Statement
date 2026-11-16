@@ -975,6 +975,14 @@ def get_refresh_mode():
 def generate_etag(stock_id, updated_at, limit):
     return f'W/"{stock_id}-v{CALC_VERSION}-{updated_at}-{limit}"'
 
+@app.route('/api/ping', methods=['GET'])
+def api_ping():
+    """極輕量的存活檢查：不查資料庫、不呼叫外部 API、不受限流。
+    前端用它判斷 Render 是否在睡眠；外部排程服務（如 cron-job.org）也可每 10 分鐘呼叫它，讓主機不睡著。"""
+    resp = jsonify({"ok": True, "time": get_iso_now()})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
 @app.route('/api/health', methods=['GET'])
 def api_health():
     db_ok = False

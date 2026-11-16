@@ -19,7 +19,78 @@ document.documentElement.setAttribute('data-theme', localStorage.getItem('app_th
 document.addEventListener('DOMContentLoaded', () => {
   setActiveNav();
   if (isFirstVisit) seedDefaultPortfolio();
+  checkBackendAwake();
 });
+
+// ================= 後端喚醒偵測 =================
+// Render 免費方案閒置 15 分鐘後會睡眠，下一個請求要等約 1 分鐘主機才會醒。
+// 打開網頁時先呼叫輕量的 /api/ping：醒著的主機通常 1 秒內回應；超過 WAKE_HINT_DELAY 還沒回應，
+// 就判斷主機在睡眠，顯示提示並倒數已等待秒數，主機回應後自動收起。
+const WAKE_HINT_DELAY = 2500;     // 超過這個時間沒回應，視為正在喚醒
+const WAKE_GIVE_UP_MS = 150000;   // 等超過 2.5 分鐘仍沒回應，改顯示連線失敗
+const WAKE_RETRY_MS = 4000;       // 喚醒期間 Render 可能回 502/503 或連線中斷，隔幾秒再試
+
+function checkBackendAwake() {
+  const startedAt = Date.now();
+  let banner = null;
+  let tickTimer = null;
+  let finished = false;
+
+  const elapsedSec = () => Math.round((Date.now() - startedAt) / 1000);
+  const setBanner = (state, html) => {
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.className = 'wake-banner';
+      banner.setAttribute('role', 'status');
+      banner.setAttribute('aria-live', 'polite');
+      const header = document.querySelector('header');
+      if (header) header.insertAdjacentElement('afterend', banner);
+      else document.body.prepend(banner);
+    }
+    banner.dataset.state = state;
+    banner.innerHTML = html;
+  };
+  const renderWaking = () => setBanner('waking',
+    `<span class="wake-spinner" aria-hidden="true"></span>
+     <span>後端主機正在從睡眠中喚醒，<strong>約需 1 分鐘</strong>，資料會在主機啟動後自動載入，請稍候…
+     <span class="wake-elapsed">（已等待 ${elapsedSec()} 秒）</span></span>`);
+
+  const hintTimer = setTimeout(() => {
+    if (finished) return;
+    renderWaking();
+    tickTimer = setInterval(renderWaking, 1000);
+  }, WAKE_HINT_DELAY);
+
+  const finish = (ok) => {
+    finished = true;
+    clearTimeout(hintTimer);
+    clearInterval(tickTimer);
+    if (!banner) return; // 主機本來就醒著，什麼都不顯示
+    if (ok) {
+      setBanner('ready', `✅ 主機已啟動（花了 ${elapsedSec()} 秒），可以正常使用了。`);
+      setTimeout(() => banner.remove(), 3000);
+    } else {
+      setBanner('error', '⚠️ 無法連線到後端主機，請稍後重新整理頁面再試一次。');
+    }
+  };
+
+  const attempt = async () => {
+    const remaining = WAKE_GIVE_UP_MS - (Date.now() - startedAt);
+    if (remaining <= 0) return finish(false);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), remaining);
+    try {
+      const res = await fetch(`${API_BASE}/api/ping`, { cache: 'no-store', signal: controller.signal });
+      if (res.ok) return finish(true);
+    } catch (err) {
+      if (err.name === 'AbortError') return finish(false);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+    setTimeout(attempt, WAKE_RETRY_MS);
+  };
+  attempt();
+}
 
 function isEtfId(id) { return /^00\d{2,4}[A-Za-z]?$/.test(id || ''); }
 
