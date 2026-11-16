@@ -22,7 +22,19 @@
       <button class="theme-toggle" onclick="toggleTheme()" title="切換深淺色">🌓</button>
     </div>
   </header>
-  <main>
+  <main class="has-toc">
+   <div class="toc-layout">
+    <!-- 區塊導覽：寬螢幕固定在左側，窄螢幕變成頂部可橫向捲動的列 -->
+    <aside class="page-toc" id="home-toc" aria-label="頁面區塊導覽">
+      <p class="page-toc-title">本頁區塊</p>
+      <ul>
+        <li><a href="#tracked-section" data-key="tracked-section"><span class="page-toc-label">⭐ 自選股</span><span class="page-toc-num" id="toc-tracked-count"></span></a></li>
+        <li><a href="#etf-section" data-key="etf-section"><span class="page-toc-label">🧺 ETF</span><span class="page-toc-num" id="toc-etf-count"></span></a></li>
+        <li><a href="#others-section" data-key="others-section"><span class="page-toc-label">📄 其他已查詢股票</span><span class="page-toc-num" id="toc-others-count"></span></a></li>
+        <li><a href="#rec-section" data-key="rec-section"><span class="page-toc-label">🔍 推薦的同類型公司</span></a></li>
+      </ul>
+    </aside>
+    <div class="toc-main">
     <div class="card flex-between" style="flex-wrap: wrap; gap: 12px;">
       <div>
         <input type="text" id="stock-input" placeholder="輸入股票或 ETF 代號 (例: 2330、0050)" maxlength="6" onkeypress="if(event.key==='Enter') addStock()">
@@ -44,6 +56,16 @@
       <div id="tracked-body">
         <div id="tracked-grid" class="grid-3"></div>
         <p id="tracked-empty" class="empty-state" style="display:none;"></p>
+      </div>
+    </section>
+
+    <section id="etf-section" style="display:none;">
+      <h2 class="section-title">
+        🧺 自選 ETF <span class="section-count" id="etf-count"></span>
+        <button class="section-toggle" id="etf-toggle" onclick="toggleSection('etf')" aria-expanded="true" title="展開／收合">▼</button>
+      </h2>
+      <div id="etf-body">
+        <div id="etf-grid" class="grid-3"></div>
       </div>
     </section>
 
@@ -69,6 +91,8 @@
         <div id="rec-footer"></div>
       </div>
     </section>
+    </div><!-- /.toc-main -->
+   </div><!-- /.toc-layout -->
   </main>
   <footer class="site-footer">本網站資料來自公開資訊（FinMind、證交所、櫃買中心、MoneyDJ），依財報數據自動計算，可能有延遲或誤差；所有內容僅供參考，不構成投資建議。</footer>
 

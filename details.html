@@ -22,7 +22,7 @@
       <button class="theme-toggle" onclick="toggleTheme()">🌓</button>
     </div>
   </header>
-  <main>
+  <main class="has-toc">
     <div class="flex-between" style="margin-bottom: 16px;">
       <a href="index.html" class="btn-outline" style="text-decoration:none;">← 返回已查詢股票</a>
       <select id="detail-stock-select" onchange="changeDetailStock(this.value)"></select>
@@ -45,7 +45,29 @@
 
     <div id="preview-banner" style="display:none;"></div>
     <div id="detail-content" style="display:none;">
-      <div class="card" style="margin-bottom: 16px;">
+     <div class="toc-layout">
+      <!-- 區塊導覽：寬螢幕固定在左側，窄螢幕變成頂部可橫向捲動的列 -->
+      <aside class="page-toc" id="detail-toc" aria-label="頁面區塊導覽">
+        <p class="page-toc-title">本頁區塊</p>
+        <ul>
+          <li><a href="#overview-card" data-key="overview-card">📊 總覽與風險趨勢</a></li>
+          <li><a href="#news-card" data-key="news-card">📰 相關新聞</a></li>
+          <li><a href="#links-card" data-key="links-card">🔗 官方資料連結</a></li>
+          <li><a href="#conf-card" data-key="conf-card">🎤 法人說明會</a></li>
+          <li><a href="#peers-card" data-key="peers-card">🔍 同類型公司</a></li>
+          <li><a href="#radar-card" data-key="radar-card">🕸️ 健康度雷達圖</a></li>
+          <li><a href="#statements-card" data-key="statements-card">📑 財務報表</a>
+            <ul class="page-toc-sub">
+              <li><a href="#statements-card" data-key="statements-card" data-tab="income">損益表</a></li>
+              <li><a href="#statements-card" data-key="statements-card" data-tab="balance">財務狀況表</a></li>
+              <li><a href="#statements-card" data-key="statements-card" data-tab="cashflow">現金流量表</a></li>
+              <li><a href="#statements-card" data-key="statements-card" data-tab="monthly">月營收</a></li>
+            </ul>
+          </li>
+        </ul>
+      </aside>
+      <div class="toc-main">
+      <div class="card" id="overview-card" style="margin-bottom: 16px;">
         <div class="flex-between">
           <div>
             <h2 id="detail-name" style="margin-bottom: 8px;">--</h2>
@@ -156,7 +178,7 @@
         <div id="radar-financial-msg" class="empty-state" style="display:none; margin: 24px 0;"></div>
       </div>
 
-      <div class="card">
+      <div class="card" id="statements-card">
         <div class="tabs">
           <button class="tab-btn active" onclick="switchDetailTab('income')">損益表</button>
           <button class="tab-btn" onclick="switchDetailTab('balance')">財務狀況表</button>
@@ -214,6 +236,8 @@
           </div>
         </div>
       </div>
+      </div><!-- /.toc-main -->
+     </div><!-- /.toc-layout -->
     </div>
     <div id="etf-view" style="display:none;"></div>
   </main>

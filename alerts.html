@@ -22,7 +22,14 @@
       <button class="theme-toggle" onclick="toggleTheme()">🌓</button>
     </div>
   </header>
-  <main>
+  <main class="has-toc">
+   <div class="toc-layout">
+    <!-- 公司導覽：寬螢幕固定在左側，窄螢幕變成頂部可橫向捲動的列 -->
+    <aside class="page-toc" id="alerts-toc" aria-label="自選公司導覽">
+      <p class="page-toc-title">自選公司<span id="alerts-toc-count"></span></p>
+      <ul id="alerts-toc-list"></ul>
+    </aside>
+    <div class="toc-main">
     <div class="card flex-between" style="margin-bottom: 16px; flex-wrap: wrap; gap: 12px;">
       <h3>⚠️ 觸發警訊總覽</h3>
       <select id="alert-filter" onchange="renderAlerts()">
@@ -36,6 +43,8 @@
     <div id="alerts-empty" class="empty-state" style="display:none;">
       <p>載入中…</p>
     </div>
+    </div><!-- /.toc-main -->
+   </div><!-- /.toc-layout -->
   </main>
   <footer class="site-footer">本網站資料來自公開資訊（FinMind、證交所、櫃買中心、MoneyDJ），依財報數據自動計算，可能有延遲或誤差；所有內容僅供參考，不構成投資建議。</footer>
 

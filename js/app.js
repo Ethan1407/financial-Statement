@@ -1,6 +1,25 @@
 const API_BASE = (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost' || window.location.protocol === 'file:')
     ? 'http://127.0.0.1:5000'
     : 'https://financial-statement-xou2.onrender.com';
+const IS_LOCAL_API = API_BASE.includes('127.0.0.1');
+
+// ================= 錯誤原因：把連線／HTTP 錯誤翻成使用者看得懂的說明 =================
+// fetch 本身失敗（TypeError: Failed to fetch）代表根本連不到後端
+function networkErrorReason() {
+  return IS_LOCAL_API
+    ? `連不到本機後端（${API_BASE}）：請先在專案資料夾執行「python server.py」啟動後端`
+    : '連不到後端主機：主機可能正在從睡眠中喚醒（約 1 分鐘），或你的網路中斷';
+}
+function httpErrorReason(status, body) {
+  if (status === 429) return '請求太頻繁，伺服器暫時限制（每分鐘 30 次），請稍候約 1 分鐘再試';
+  if (body && body.error) return body.error;
+  if (status === 404) return '後端找不到這個功能（後端可能還是舊版本，尚未部署更新）';
+  if (status >= 500) return `後端發生錯誤（HTTP ${status}），請稍後再試`;
+  return `伺服器回應 HTTP ${status}`;
+}
+function fetchErrorReason(err) {
+  return err instanceof TypeError ? networkErrorReason() : (err && err.message) || '未知錯誤';
+}
 
 // 第一次造訪（這個瀏覽器從未存過自選股）時預設加入的自選股
 const DEFAULT_PORTFOLIO = ['2330', '0050'];
@@ -29,9 +48,25 @@ document.addEventListener('DOMContentLoaded', () => {
 const WAKE_HINT_DELAY = 2500;     // 超過這個時間沒回應，視為正在喚醒
 const WAKE_GIVE_UP_MS = 150000;   // 等超過 2.5 分鐘仍沒回應，改顯示連線失敗
 const WAKE_RETRY_MS = 4000;       // 喚醒期間 Render 可能回 502/503 或連線中斷，隔幾秒再試
+const WAKE_STARTED_KEY = 'backend_wake_started_at'; // 喚醒開始時間，切換頁面後接續計時
+
+function readWakeStartedAt() {
+  try {
+    const t = Number(localStorage.getItem(WAKE_STARTED_KEY));
+    return t && Date.now() - t < WAKE_GIVE_UP_MS ? t : 0;
+  } catch { return 0; }
+}
+function writeWakeStartedAt(t) {
+  try { t ? localStorage.setItem(WAKE_STARTED_KEY, String(t)) : localStorage.removeItem(WAKE_STARTED_KEY); } catch {}
+}
 
 function checkBackendAwake() {
-  const startedAt = Date.now();
+  if (backendCheckRunning) return;
+  backendCheckRunning = true;
+  // 切換頁面時，上一頁的計時會隨頁面一起消失，但 Render 的開機並不會中斷。
+  // 若上一頁已在喚醒中，沿用當時的開始時間繼續計時，並立刻顯示提示。
+  const resumedAt = readWakeStartedAt();
+  const startedAt = resumedAt || Date.now();
   let banner = null;
   let tickTimer = null;
   let finished = false;
@@ -50,27 +85,42 @@ function checkBackendAwake() {
     banner.dataset.state = state;
     banner.innerHTML = html;
   };
-  const renderWaking = () => setBanner('waking',
-    `<span class="wake-spinner" aria-hidden="true"></span>
-     <span>後端主機正在從睡眠中喚醒，<strong>約需 1 分鐘</strong>，資料會在主機啟動後自動載入，請稍候…
-     <span class="wake-elapsed">（已等待 ${elapsedSec()} 秒）</span></span>`);
+  const renderWaking = () => {
+    setBanner('waking',
+      `<span class="wake-spinner" aria-hidden="true"></span>
+       <span>後端主機正在從睡眠中喚醒，<strong>約需 1 分鐘</strong>，資料會在主機啟動後自動載入，請稍候…
+       <span class="wake-elapsed">（已等待 ${elapsedSec()} 秒）</span></span>`);
+    setServerStatus('waking', `喚醒中 ${elapsedSec()} 秒`, '主機正在從睡眠中啟動，約需 1 分鐘');
+  };
 
+  setServerStatus('checking', '檢查中', '正在確認後端主機狀態');
   const hintTimer = setTimeout(() => {
     if (finished) return;
+    writeWakeStartedAt(startedAt);
     renderWaking();
     tickTimer = setInterval(renderWaking, 1000);
-  }, WAKE_HINT_DELAY);
+  }, resumedAt ? 0 : WAKE_HINT_DELAY);
 
-  const finish = (ok) => {
+  const finish = (ok, latencyMs) => {
     finished = true;
+    backendCheckRunning = false;
+    writeWakeStartedAt(0);
     clearTimeout(hintTimer);
     clearInterval(tickTimer);
-    if (!banner) return; // 主機本來就醒著，什麼都不顯示
     if (ok) {
+      backendLastOkAt = Date.now();
+      setServerStatus('online', '運作中', banner
+        ? `主機已啟動（喚醒花了 ${elapsedSec()} 秒）`
+        : `主機運作中，回應時間 ${latencyMs} ms`);
+    } else {
+      setServerStatus('offline', '無法連線', networkErrorReason());
+    }
+    if (ok) {
+      if (!banner) return; // 主機本來就醒著，不顯示橫幅
       setBanner('ready', `✅ 主機已啟動（花了 ${elapsedSec()} 秒），可以正常使用了。`);
       setTimeout(() => banner.remove(), 3000);
     } else {
-      setBanner('error', '⚠️ 無法連線到後端主機，請稍後重新整理頁面再試一次。');
+      setBanner('error', `⚠️ ${escapeHtml(networkErrorReason())}。頁面上的資料會無法載入，${IS_LOCAL_API ? '啟動後' : '稍後'}點右上角「主機」狀態可重新檢查。`);
     }
   };
 
@@ -79,11 +129,14 @@ function checkBackendAwake() {
     if (remaining <= 0) return finish(false);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), remaining);
+    const sentAt = performance.now();
     try {
       const res = await fetch(`${API_BASE}/api/ping`, { cache: 'no-store', signal: controller.signal });
-      if (res.ok) return finish(true);
+      if (res.ok) return finish(true, Math.round(performance.now() - sentAt));
     } catch (err) {
       if (err.name === 'AbortError') return finish(false);
+      // 本機後端不會睡眠，連不上就是沒啟動，不必等
+      if (IS_LOCAL_API) return finish(false);
     } finally {
       clearTimeout(timeoutId);
     }
@@ -91,6 +144,38 @@ function checkBackendAwake() {
   };
   attempt();
 }
+
+// ================= 頂部橫幅右側的主機狀態 =================
+let backendCheckRunning = false;
+let backendLastOkAt = 0;
+const BACKEND_RECHECK_MS = 10 * 60 * 1000; // 分頁離開超過 10 分鐘再回來時重新確認（Render 閒置 15 分鐘會睡眠）
+
+function setServerStatus(state, text, title) {
+  let el = document.getElementById('server-status');
+  if (!el) {
+    const toggle = document.querySelector('header .theme-toggle');
+    if (!toggle) return;
+    // 把狀態與主題切換按鈕包在一起，維持導覽列原本的左、中、右三欄排列
+    const group = document.createElement('div');
+    group.className = 'header-right';
+    toggle.replaceWith(group);
+    el = document.createElement('button');
+    el.id = 'server-status';
+    el.type = 'button';
+    el.className = 'server-status';
+    el.setAttribute('aria-live', 'polite');
+    el.innerHTML = '<span class="server-status-dot" aria-hidden="true"></span><span class="server-status-label">主機：</span><span class="server-status-text"></span>';
+    el.addEventListener('click', () => { if (el.dataset.state !== 'waking' && el.dataset.state !== 'checking') checkBackendAwake(); });
+    group.append(el, toggle);
+  }
+  el.dataset.state = state;
+  el.querySelector('.server-status-text').textContent = text;
+  el.title = title + (state === 'online' || state === 'offline' ? '（點一下重新檢查）' : '');
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && backendLastOkAt && Date.now() - backendLastOkAt > BACKEND_RECHECK_MS) checkBackendAwake();
+});
 
 function isEtfId(id) { return /^00\d{2,4}[A-Za-z]?$/.test(id || ''); }
 
@@ -167,7 +252,7 @@ async function requestStock(id, refresh = false) {
   } catch (err) {
       return err.name === 'AbortError'
           ? { error: '請求逾時：雲端伺服器可能正在喚醒中，請再試一次！', status: 'timeout' }
-          : { error: '無法連線到 Python 伺服器！請確認後端已啟動。', status: 'network' };
+          : { error: networkErrorReason(), status: 'network' };
   } finally {
       clearTimeout(timeoutId);
   }
@@ -338,30 +423,37 @@ function renderStockOverview() {
       return list;
   };
 
-  // ETF 沒有個股燈號，依代號排在個股之後
+  // ETF 沒有個股燈號，依代號排序
   const buildSection = (ids, isTracked) => {
       const stocks = analyzeAll(ids);
       const etfs = ids.filter(id => stockDatabase[id] && stockDatabase[id].isEtf).sort((a, b) => a.localeCompare(b));
       return {
-          count: stocks.length + etfs.length,
-          html: stocks.map(item => stockCardHtml(item, isTracked)).join('') + etfs.map(id => etfCardHtml(id, stockDatabase[id], isTracked)).join('')
+          stockCount: stocks.length, etfCount: etfs.length, count: stocks.length + etfs.length,
+          stockHtml: stocks.map(item => stockCardHtml(item, isTracked)).join(''),
+          etfHtml: etfs.map(id => etfCardHtml(id, stockDatabase[id], isTracked)).join('')
       };
   };
 
+  // 自選股：個股與 ETF 分成兩個區塊
   const tracked = buildSection(portfolio, true);
-  trackedGrid.innerHTML = tracked.html;
-  document.getElementById('tracked-count').textContent = `(${tracked.count})`;
+  trackedGrid.innerHTML = tracked.stockHtml;
+  document.getElementById('tracked-count').textContent = `(${tracked.stockCount})`;
   const trackedEmpty = document.getElementById('tracked-empty');
-  trackedEmpty.style.display = tracked.count ? 'none' : 'block';
+  trackedEmpty.style.display = tracked.stockCount ? 'none' : 'block';
   trackedEmpty.textContent = seedingDefaults
       ? `正在載入預設自選股（${DEFAULT_PORTFOLIO.join('、')}）…`
-      : '尚未加入自選股，請在上方輸入代號 (例: 2330、2317、2887、0050)';
+      : (tracked.etfCount ? '尚未加入個股，請在上方輸入代號 (例: 2330、2317、2887)' : '尚未加入自選股，請在上方輸入代號 (例: 2330、2317、2887、0050)');
+  document.getElementById('etf-section').style.display = tracked.etfCount ? 'block' : 'none';
+  document.getElementById('etf-count').textContent = `(${tracked.etfCount})`;
+  document.getElementById('etf-grid').innerHTML = tracked.etfHtml;
 
+  // 其他已查詢：個股在前、ETF 在後
   const others = buildSection(Object.keys(stockDatabase).filter(id => !portfolio.includes(id)), false);
   document.getElementById('others-section').style.display = others.count ? 'block' : 'none';
   document.getElementById('others-count').textContent = `(${others.count})`;
-  document.getElementById('others-grid').innerHTML = others.html;
-  ['tracked', 'others'].forEach(applySectionState);
+  document.getElementById('others-grid').innerHTML = others.stockHtml + others.etfHtml;
+  ['tracked', 'etf', 'others'].forEach(applySectionState);
+  updateHomeToc({ tracked: tracked.stockCount, etf: tracked.etfCount, others: others.count });
   if (typeof renderHomeRecommendations === 'function') renderHomeRecommendations();
 }
 
@@ -397,7 +489,7 @@ function renderAlerts() {
   let hasAnyAlert = false;
 
   if (mode === 'group') {
-    portfolio.sort((a, b) => a.localeCompare(b)).forEach(id => {
+    sortByTocOrder([...portfolio].sort((a, b) => a.localeCompare(b)), ALERTS_ORDER_KEY).forEach(id => {
       const analysis = analyzeStock(id);
       if (analysis && analysis.alerts && analysis.alerts.length > 0) {
         hasAnyAlert = true;
@@ -417,7 +509,7 @@ function renderAlerts() {
         }).join('');
 
         container.innerHTML += `
-          <div class="card" style="margin-bottom: 16px; border-top: 4px solid var(--${analysis.status})">
+          <div class="card" data-stock-id="${id}" style="margin-bottom: 16px; border-top: 4px solid var(--${analysis.status})">
             <h3 style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
               <span>${id} ${escapeHtml(analysis.data.name)}</span><span class="badge ${analysis.status}">${analysis.alerts.length} 項警訊</span>
             </h3>
@@ -447,7 +539,7 @@ function renderAlerts() {
       const badgeClass = lvl === 'red' ? 'red' : 'yellow';
       const badgeText = lvl === 'red' ? '紅燈' : '黃燈';
       container.innerHTML += `
-        <a href="details.html?id=${a.stockId}&tab=${a.rule.tab}" class="alert-item ${lvl}" style="display:block; color:inherit;">
+        <a href="details.html?id=${a.stockId}&tab=${a.rule.tab}" class="alert-item ${lvl}" data-stock-id="${a.stockId}" style="display:block; color:inherit;">
           <div class="flex-between" style="margin-bottom: 4px;">
             <strong>${a.stockId} ${escapeHtml(a.stockName)} - ${a.rule.name}</strong><span class="badge ${badgeClass}">${badgeText}</span>
           </div>
@@ -459,6 +551,7 @@ function renderAlerts() {
 
   empty.style.display = hasAnyAlert ? 'none' : 'block';
   if (!hasAnyAlert) empty.innerHTML = alertsEmptyMessage(mode);
+  renderAlertsToc();
 }
 
 // 沒有警訊時，區分「真的通過檢驗」與「根本沒有可檢驗的股票」，避免誤以為沒有風險
@@ -596,7 +689,362 @@ function switchDetailTab(tabId) {
   const targetTab = document.getElementById(`tab-${tabId}`);
   if(targetBtn) targetBtn.classList.add('active');
   if(targetTab) targetTab.classList.add('active');
+  document.querySelectorAll('.page-toc a[data-tab]').forEach(a => a.classList.toggle('active', a.dataset.tab === tabId));
 }
+
+// ================= 左側區塊導覽（個股詳情、警訊總覽共用） =================
+// 寬螢幕時固定在左側；窄螢幕（≤ 960px）時變成黏在導覽列下方、可橫向捲動的一列。
+const TOC_COMPACT_QUERY = window.matchMedia('(max-width: 960px)');
+
+function tocStickyOffset() {
+  const header = document.querySelector('header');
+  let offset = header ? header.getBoundingClientRect().height : 0;
+  const toc = document.querySelector('.page-toc');
+  if (toc && TOC_COMPACT_QUERY.matches) offset += toc.getBoundingClientRect().height;
+  return offset + 12;
+}
+
+function scrollToWithOffset(el) {
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const top = el.getBoundingClientRect().top + window.scrollY - tocStickyOffset();
+  window.scrollTo({ top, behavior: reduceMotion ? 'auto' : 'smooth' });
+}
+
+// 讓 CSS 知道導覽列高度（導覽列在手機上會換行，高度不固定）
+function syncHeaderHeightVar() {
+  const header = document.querySelector('header');
+  if (!header) return;
+  const sync = () => document.documentElement.style.setProperty('--header-h', `${header.getBoundingClientRect().height}px`);
+  sync();
+  if ('ResizeObserver' in window) new ResizeObserver(sync).observe(header);
+  else window.addEventListener('resize', sync);
+}
+
+/**
+ * 設定左側導覽：點擊跳轉＋捲動時標示目前位置。
+ * - getMarkers()：回傳頁面上的位置標記 [{ key, el }]（依頁面順序），每次捲動時重新取得，內容重畫也不受影響
+ * - resolveTarget(link)：回傳點擊後要跳到的元素；回傳 null 時照連結原本的 href 前往
+ * 導覽中的連結以 data-key 對應標記的 key。
+ */
+function setupPageToc(toc, { getMarkers, resolveTarget }) {
+  syncHeaderHeightVar();
+
+  toc.addEventListener('click', (e) => {
+    const link = e.target.closest('a[data-key]');
+    if (!link) return;
+    const target = resolveTarget(link);
+    if (!target) return;
+    e.preventDefault();
+    scrollToWithOffset(target);
+    target.classList.remove('toc-flash');
+    void target.offsetWidth; // 重新觸發動畫
+    target.classList.add('toc-flash');
+  });
+
+  let ticking = false;
+  const update = () => {
+    ticking = false;
+    const markers = getMarkers().filter(m => m.el.offsetParent !== null);
+    if (!markers.length) {
+      toc.querySelectorAll('a[data-key].active').forEach(a => a.classList.remove('active'));
+      return;
+    }
+    const line = tocStickyOffset() + 40;
+    let current = markers[0];
+    for (const m of markers) if (m.el.getBoundingClientRect().top <= line) current = m;
+    // 捲到頁面最底時，最後一個區塊可能永遠到不了判斷線，直接標示最後一個
+    if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) current = markers[markers.length - 1];
+    toc.querySelectorAll('a[data-key]:not([data-tab])').forEach(a => {
+      const isActive = a.dataset.key === current.key;
+      a.classList.toggle('active', isActive);
+      if (isActive && TOC_COMPACT_QUERY.matches) {
+        // 窄螢幕：把目前的項目橫向捲進可視範圍（不用 scrollIntoView，避免連帶垂直捲動）
+        const left = a.offsetLeft - (toc.clientWidth - a.offsetWidth) / 2;
+        toc.scrollTo({ left: Math.max(0, left), behavior: 'auto' });
+      } else if (isActive) {
+        // 寬螢幕：導覽本身太長而出現捲軸時，讓目前項目保持在導覽可見範圍內
+        const aTop = a.offsetTop, aBottom = aTop + a.offsetHeight;
+        if (aTop < toc.scrollTop || aBottom > toc.scrollTop + toc.clientHeight) toc.scrollTop = aTop - toc.clientHeight / 2;
+      }
+    });
+  };
+  const schedule = () => { if (!ticking) { ticking = true; requestAnimationFrame(update); } };
+  window.addEventListener('scroll', schedule, { passive: true });
+  window.addEventListener('resize', schedule);
+  update();
+  return { refresh: schedule };
+}
+
+// ================= 導覽「編輯」：使用者自訂排列順序（只存在這台裝置的瀏覽器） =================
+function loadTocOrder(storageKey) {
+  try {
+    const v = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    return Array.isArray(v) ? v : null;
+  } catch { return null; }
+}
+function saveTocOrder(storageKey, keys) {
+  try { keys ? localStorage.setItem(storageKey, JSON.stringify(keys)) : localStorage.removeItem(storageKey); } catch {}
+}
+// 依使用者存的順序排序；沒出現在順序裡的（例如新加入的公司）維持原本相對順序排在後面
+function sortByTocOrder(list, storageKey, getKey = x => x) {
+  const order = loadTocOrder(storageKey);
+  if (!order) return list;
+  const pos = new Map(order.map((k, i) => [k, i]));
+  const rank = x => (pos.has(getKey(x)) ? pos.get(getKey(x)) : Infinity);
+  return [...list].sort((a, b) => rank(a) - rank(b));
+}
+const liKey = li => { const a = li.querySelector(':scope > a[data-key]'); return a ? a.dataset.key : null; };
+// 依 keys 重新排列 parent 底下對應的子元素（只動這些元素，其他元素位置不變）
+function reorderChildren(keys, getEl) {
+  const els = keys.map(getEl).filter(Boolean);
+  if (els.length < 2) return;
+  const parent = els[0].parentNode;
+  const first = [...parent.children].find(c => els.includes(c));
+  const anchor = document.createComment('order');
+  parent.insertBefore(anchor, first);
+  els.forEach(el => parent.insertBefore(el, anchor));
+  anchor.remove();
+}
+
+/**
+ * 在導覽標題加上「編輯」按鈕。編輯模式下可拖曳或用 ▲▼ 調整 listEl 底下各項目的順序。
+ * - onChange(keys)：順序改變後呼叫（keys 為 null 代表恢復預設）
+ */
+function setupTocEditor(toc, { storageKey, listEl, onChange }) {
+  const title = toc.querySelector('.page-toc-title');
+  if (!title) return { refresh() {} };
+  let editing = false;
+  let dragging = null;
+
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.className = 'toc-edit-btn';
+  editBtn.textContent = '✎ 編輯';
+  editBtn.title = '自訂排列順序（只存在這台裝置）';
+  title.appendChild(editBtn);
+
+  const bar = document.createElement('div');
+  bar.className = 'toc-edit-bar';
+  bar.innerHTML = `<p>拖曳或按 ▲▼ 調整順序，會自動儲存在這台裝置的瀏覽器。</p>
+    <div><button type="button" class="btn-outline toc-edit-reset">恢復預設</button>
+    <button type="button" class="btn-primary toc-edit-done">完成</button></div>`;
+  title.insertAdjacentElement('afterend', bar);
+
+  const items = () => [...listEl.children].filter(li => liKey(li));
+  const visible = li => li.style.display !== 'none';
+  const commit = () => {
+    const keys = items().map(liKey);
+    saveTocOrder(storageKey, keys);
+    onChange(keys);
+  };
+  const refresh = () => {
+    toc.classList.toggle('editing', editing);
+    editBtn.textContent = editing ? '完成' : '✎ 編輯';
+    editBtn.setAttribute('aria-pressed', String(editing));
+    items().forEach(li => {
+      li.draggable = editing;
+      let ctl = li.querySelector(':scope > .toc-move');
+      if (editing && !ctl) {
+        ctl = document.createElement('span');
+        ctl.className = 'toc-move';
+        ctl.innerHTML = '<button type="button" class="toc-move-up" title="往前移" aria-label="往前移">▲</button><button type="button" class="toc-move-down" title="往後移" aria-label="往後移">▼</button>';
+        li.appendChild(ctl);
+      } else if (!editing && ctl) {
+        ctl.remove();
+      }
+    });
+  };
+  const setEditing = (on) => { editing = on; refresh(); };
+
+  editBtn.addEventListener('click', () => setEditing(!editing));
+  bar.querySelector('.toc-edit-done').addEventListener('click', () => setEditing(false));
+  bar.querySelector('.toc-edit-reset').addEventListener('click', () => {
+    saveTocOrder(storageKey, null);
+    onChange(null);
+    refresh();
+  });
+
+  // 編輯中點連結不跳轉（capture 階段攔下，導覽本身的點擊處理就不會執行）
+  toc.addEventListener('click', (e) => {
+    if (!editing) return;
+    const move = e.target.closest('.toc-move-up, .toc-move-down');
+    if (move) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const li = move.closest('li');
+      const up = move.classList.contains('toc-move-up');
+      let sib = up ? li.previousElementSibling : li.nextElementSibling;
+      while (sib && !visible(sib)) sib = up ? sib.previousElementSibling : sib.nextElementSibling;
+      if (!sib) return;
+      const key = liKey(li);
+      listEl.insertBefore(li, up ? sib : sib.nextElementSibling);
+      commit();
+      // 清單可能被重畫（警訊總覽），依代號找回同一項讓鍵盤焦點留在原處
+      const now = [...listEl.children].find(x => liKey(x) === key);
+      const again = now && now.querySelector(up ? '.toc-move-up' : '.toc-move-down');
+      if (again) again.focus();
+      return;
+    }
+    if (e.target.closest('a[data-key]')) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+    }
+  }, true);
+
+  listEl.addEventListener('dragstart', (e) => {
+    const li = e.target.closest('li');
+    if (!editing || !li || li.parentElement !== listEl) return;
+    dragging = li;
+    li.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', liKey(li)); } catch {}
+  });
+  listEl.addEventListener('dragover', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    const over = e.target.closest('li');
+    if (!over || over === dragging || over.parentElement !== listEl) return;
+    const rect = over.getBoundingClientRect();
+    const after = TOC_COMPACT_QUERY.matches
+      ? e.clientX > rect.left + rect.width / 2
+      : e.clientY > rect.top + rect.height / 2;
+    listEl.insertBefore(dragging, after ? over.nextElementSibling : over);
+  });
+  listEl.addEventListener('dragend', () => {
+    if (!dragging) return;
+    dragging.classList.remove('dragging');
+    dragging = null;
+    commit();
+  });
+
+  return { refresh, isEditing: () => editing };
+}
+
+// 區塊型頁面（個股詳情、已查詢股票）：導覽順序＝頁面區塊順序
+function setupSectionOrderEditor(toc, storageKey) {
+  const listEl = toc.querySelector(':scope > ul');
+  const defaultKeys = [...listEl.children].map(liKey).filter(Boolean);
+  const apply = (keys) => {
+    const order = keys || defaultKeys;
+    const full = [...order.filter(k => defaultKeys.includes(k)), ...defaultKeys.filter(k => !order.includes(k))];
+    reorderChildren(full, k => [...listEl.children].find(li => liKey(li) === k));
+    reorderChildren(full, k => document.getElementById(k));
+  };
+  const saved = loadTocOrder(storageKey);
+  if (saved) apply(saved);
+  return setupTocEditor(toc, { storageKey, listEl, onChange: apply });
+}
+// 依目前導覽順序（＝頁面順序）取得區塊標記
+function sectionMarkers(toc) {
+  return [...toc.querySelectorAll(':scope > ul > li > a[data-key]')]
+    .map(a => ({ key: a.dataset.key, el: document.getElementById(a.dataset.key) })).filter(m => m.el);
+}
+
+// 個股詳情：固定的區塊清單（財務報表底下的子項目會順便切換分頁）
+function initDetailToc() {
+  const toc = document.getElementById('detail-toc');
+  if (!toc) return;
+  setupSectionOrderEditor(toc, 'toc_order_details');
+  setupPageToc(toc, {
+    getMarkers: () => sectionMarkers(toc),
+    resolveTarget: (link) => {
+      if (link.dataset.tab) switchDetailTab(link.dataset.tab);
+      return document.getElementById(link.dataset.key);
+    }
+  });
+  const activeTab = document.querySelector('.tab-btn.active');
+  const m = activeTab && (activeTab.getAttribute('onclick') || '').match(/switchDetailTab\('(\w+)'\)/);
+  if (m) toc.querySelectorAll('a[data-tab]').forEach(a => a.classList.toggle('active', a.dataset.tab === m[1]));
+}
+
+// 警訊總覽：列出所有自選公司，點擊跳到該公司的警訊
+let alertsTocCtl = null;
+let alertsTocEditor = null;
+const ALERTS_ORDER_KEY = 'toc_order_alerts';
+function initAlertsToc() {
+  const toc = document.getElementById('alerts-toc');
+  if (!toc || alertsTocCtl) return;
+  alertsTocEditor = setupTocEditor(toc, {
+    storageKey: ALERTS_ORDER_KEY,
+    listEl: document.getElementById('alerts-toc-list'),
+    onChange: () => renderAlerts()   // 依新順序重畫公司清單與「依公司分組」的卡片
+  });
+  alertsTocCtl = setupPageToc(toc, {
+    getMarkers: () => {
+      // 依公司分組時每家公司一張卡片；其他模式下同一家公司的警訊分散各處，只取每家第一筆
+      const seen = new Set();
+      return [...document.querySelectorAll('#alerts-list [data-stock-id]')]
+        .filter(el => !seen.has(el.dataset.stockId) && seen.add(el.dataset.stockId))
+        .map(el => ({ key: el.dataset.stockId, el }));
+    },
+    resolveTarget: (link) => {
+      const id = link.dataset.key;
+      const find = () => document.querySelector(`#alerts-list [data-stock-id="${id}"]`);
+      let target = find();
+      // 目前的篩選（例如僅顯示紅燈）看不到這家公司的警訊時，切回「依公司分組」再跳
+      if (!target && Number(link.dataset.count) > 0) {
+        document.getElementById('alert-filter').value = 'group';
+        renderAlerts();
+        target = find();
+      }
+      return target; // 沒有任何警訊的公司回傳 null，直接前往個股詳情
+    }
+  });
+}
+
+function renderAlertsToc() {
+  const listEl = document.getElementById('alerts-toc-list');
+  if (!listEl) return;
+  const companies = sortByTocOrder([...portfolio].sort((a, b) => a.localeCompare(b)), ALERTS_ORDER_KEY)
+    .map(id => ({ id, analysis: analyzeStock(id) }))
+    .filter(c => c.analysis);
+  document.getElementById('alerts-toc-count').textContent = companies.length ? `（${companies.length} 家）` : '';
+  if (!companies.length) {
+    listEl.innerHTML = '<li class="page-toc-empty">尚無自選公司</li>';
+  } else {
+    listEl.innerHTML = companies.map(({ id, analysis }) => {
+      const count = analysis.alerts.length;
+      const status = count ? analysis.status : 'green';
+      return `<li><a href="details.html?id=${id}" data-key="${id}" data-count="${count}" title="${count ? `跳到 ${id} 的警訊` : `${id} 沒有警訊，前往個股詳情`}">
+        <span class="dot ${status}"></span>
+        <span class="page-toc-label">${id} ${escapeHtml(analysis.data.name)}</span>
+        <span class="page-toc-count ${count ? status : 'none'}">${count || '✓'}</span>
+      </a></li>`;
+    }).join('');
+  }
+  initAlertsToc();
+  if (alertsTocEditor) alertsTocEditor.refresh();
+  if (alertsTocCtl) alertsTocCtl.refresh();
+}
+
+// 已查詢股票：自選股、ETF、其他已查詢、推薦。點擊收合中的區塊會先展開再跳過去
+let homeTocCtl = null;
+function updateHomeToc(counts) {
+  const toc = document.getElementById('home-toc');
+  if (!toc) return;
+  Object.entries(counts).forEach(([name, n]) => {
+    const numEl = document.getElementById(`toc-${name}-count`);
+    if (numEl) numEl.textContent = n;
+    const link = toc.querySelector(`a[data-key="${name}-section"]`);
+    // ETF、其他已查詢沒有內容時區塊會隱藏，導覽也一起隱藏
+    if (link && name !== 'tracked') link.parentElement.style.display = n ? '' : 'none';
+  });
+  if (!homeTocCtl) {
+    setupSectionOrderEditor(toc, 'toc_order_home');
+    homeTocCtl = setupPageToc(toc, {
+      getMarkers: () => sectionMarkers(toc),
+      resolveTarget: (link) => {
+        const name = link.dataset.key.replace(/-section$/, '');
+        if (loadCollapsedSections().includes(name)) toggleSection(name);
+        return document.getElementById(link.dataset.key);
+      }
+    });
+  } else {
+    homeTocCtl.refresh();
+  }
+}
+
+document.addEventListener('DOMContentLoaded', initDetailToc);
 
 function generateQoQ(quarters, isFin) {
     if (quarters.length < 2) return '<p style="color:var(--text-light); font-size:0.9rem;">資料不足以比較</p>';
@@ -780,12 +1228,12 @@ async function loadConferences(stockId) {
   try {
       const response = await fetch(`${API_BASE}/api/conferences/${encodeURIComponent(stockId)}`, { signal: confController.signal });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || '法說會資料暫時無法取得');
+      if (!response.ok) throw new Error(httpErrorReason(response.status, data));
       currentConfData = data;
       renderConferences();
   } catch (err) {
       if (err.name === 'AbortError') return;
-      listEl.innerHTML = `<p style="color:var(--text-light);">${escapeHtml(err.message)} <button class="btn-outline" style="margin-left:8px;" onclick="loadConferences('${stockId}')">重試</button></p>`;
+      listEl.innerHTML = `<p style="color:var(--text-light);">法說會資料無法取得：${escapeHtml(fetchErrorReason(err))} <button class="btn-outline" style="margin-left:8px;" onclick="loadConferences('${stockId}')">重試</button></p>`;
   }
 }
 
@@ -927,12 +1375,12 @@ async function loadMonthly(stockId) {
   try {
       const response = await fetch(`${API_BASE}/api/monthly/${encodeURIComponent(stockId)}?months=24`, { signal: monthlyController.signal });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || '月營收暫時無法取得');
+      if (!response.ok) throw new Error(httpErrorReason(response.status, data));
       monthlyCache[stockId] = data;
       if (window.currentStockId === stockId) renderMonthly(stockId);
   } catch (err) {
       if (err.name === 'AbortError') return;
-      statusEl.innerHTML = `${escapeHtml(err.message)} <button class="btn-outline" style="margin-left:8px;" onclick="loadMonthly('${stockId}')">重試</button>`;
+      statusEl.innerHTML = `月營收無法取得：${escapeHtml(fetchErrorReason(err))} <button class="btn-outline" style="margin-left:8px;" onclick="loadMonthly('${stockId}')">重試</button>`;
   }
 }
 
@@ -1160,22 +1608,46 @@ async function loadNews(stockId) {
     document.querySelector('.news-filter-btn[onclick="setNewsFilter(\'all\')"]').classList.add('active');
     document.getElementById('news-updated-time').textContent = '';
 
-    try {
-        const response = await fetch(`${API_BASE}/api/news/${stockId}`, { signal: newsController.signal });
-        if (!response.ok) throw new Error('API 回傳失敗');
-        const data = await response.json();
-        
-        currentNewsData = data;
-        renderNews();
-    } catch (err) {
-        if (err.name === 'AbortError') return;
-        listContainer.innerHTML = `
-            <div style="text-align:center; color:var(--text-light);">
-                <p style="margin-bottom: 12px;">新聞暫時無法取得</p>
-                <button class="btn-outline" onclick="loadNews('${stockId}')" style="min-height:40px; padding: 0 24px;">重試</button>
-            </div>
-        `;
+    // 新聞來源（Google / Bing / Yahoo）偶爾會暫時失敗，主機喚醒中或請求太頻繁（429）時也會失敗，
+    // 所以先自動重試幾次，全部失敗才顯示錯誤與重試按鈕
+    const signal = newsController.signal;
+    let lastError = '新聞暫時無法取得';
+    for (let attempt = 0; attempt <= NEWS_RETRY_DELAYS.length; attempt++) {
+        if (attempt > 0) {
+            listContainer.innerHTML = `<p style="color:var(--text-light); text-align:center;">新聞載入中…（上次失敗：${escapeHtml(lastError)}；第 ${attempt} 次重試）</p>`;
+            try { await abortableSleep(NEWS_RETRY_DELAYS[attempt - 1], signal); } catch { return; }
+        }
+        try {
+            const response = await fetch(`${API_BASE}/api/news/${stockId}`, { signal });
+            if (response.ok) {
+                currentNewsData = await response.json();
+                renderNews();
+                return;
+            }
+            const body = await response.json().catch(() => ({}));
+            lastError = httpErrorReason(response.status, body);
+            if (response.status === 400) break; // 代號錯誤，重試也沒用
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            lastError = networkErrorReason();
+            if (IS_LOCAL_API) break; // 本機後端沒啟動，重試也沒用
+        }
     }
+    listContainer.innerHTML = `
+        <div style="text-align:center; color:var(--text-light);">
+            <p style="margin-bottom: 12px;">新聞無法取得：${escapeHtml(lastError)}</p>
+            <button class="btn-outline" onclick="loadNews('${stockId}')" style="min-height:40px; padding: 0 24px;">重試</button>
+        </div>
+    `;
+}
+
+const NEWS_RETRY_DELAYS = [3000, 8000, 15000];
+
+function abortableSleep(ms, signal) {
+    return new Promise((resolve, reject) => {
+        const t = setTimeout(resolve, ms);
+        signal.addEventListener('abort', () => { clearTimeout(t); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+    });
 }
 
 function getRelativeTime(isoStr) {

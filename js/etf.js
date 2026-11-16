@@ -32,7 +32,7 @@ async function requestEtf(id, refresh = false) {
         if (!saveStockDatabase(stockDatabase)) return { error: '瀏覽器儲存空間已滿，請先刪除部分「其他已查詢股票」。' };
         return { result };
     } catch (err) {
-        return { error: err.name === 'AbortError' ? '請求逾時：雲端伺服器可能正在喚醒中，請稍後重試！' : '無法連線到 Python 伺服器！請確認網路狀態。' };
+        return { error: err.name === 'AbortError' ? '請求逾時：雲端伺服器可能正在喚醒中，請稍後重試！' : networkErrorReason() };
     } finally {
         clearTimeout(timeoutId);
     }

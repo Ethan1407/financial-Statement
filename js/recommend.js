@@ -7,7 +7,7 @@
 const REC_SETTING_KEY = 'rec_enabled';
 const REC_HOME_GROUPS = 3;      // 首頁最多列出幾個產業
 const REC_PER_GROUP = 3;        // 每個產業列出幾家
-const REC_DETAIL_COUNT = 6;     // 個股頁列出幾家
+const REC_DETAIL_COUNT = 10;    // 個股頁列出幾家
 const REC_BROAD_INDUSTRIES = new Set(['電子工業', '其他', '所有證券', 'ETF', '上櫃ETF', '創新板股票', '創新版股票']);
 
 function recEnabled() {
@@ -84,15 +84,33 @@ function buildInterestProfile() {
   return { industries, etfs, stockCount, seen: new Set(Object.keys(db)) };
 }
 
+// 推薦卡片：和上方個股卡片同樣的尺寸與版面（標題列、資料列、虛線分隔、底部按鈕），沒有財報資料時也一樣大
 function recCardHtml(item, placement, note) {
-  const ind = (item.industries || [])[0] || '';
-  const speed = item.hasData ? '已有資料，可立即查看' : '首次查看需載入財報';
+  const inds = (item.industries || []).filter(Boolean);
+  const ind = inds[0] || '—';
+  const state = item.hasData ? 'ready' : (item.preparing ? 'preparing' : 'none');
+  const stateText = { ready: '已有資料', preparing: '資料準備中', none: '尚未載入' }[state];
+  const speed = {
+    ready: '⚡ 財報已在資料庫，點進去可立即查看',
+    preparing: '⏳ 系統正在背景準備財報，稍後即可立即查看',
+    none: '📥 首次查看需向資料來源載入財報（約數秒）'
+  }[state];
+  const reason = note || `與你研究的「${ind}」同產業`;
   return `
-    <a class="rec-card" href="details.html?id=${encodeURIComponent(item.id)}&from=rec" onclick="recSendEvent('click', '${placement}')">
-      <strong>${escapeHtml(item.id)} ${escapeHtml(item.name || '')}</strong>
-      <span>${escapeHtml(note || ind)}</span>
-      <span class="rec-speed">${speed}</span>
-    </a>`;
+    <div class="card rec-card" data-state="${state}">
+      <div class="flex-between rec-card-head">
+        <h3>${escapeHtml(item.id)} ${escapeHtml(item.name || '')}</h3>
+        <span class="rec-state ${state}"><span class="dot"></span>${stateText}</span>
+      </div>
+      <div class="rec-rows">
+        <div><span>產業類別：</span><strong>${escapeHtml(inds.join('、') || '—')}</strong></div>
+        <div><span>推薦原因：</span><strong>${escapeHtml(reason)}</strong></div>
+      </div>
+      <p class="rec-speed">${speed}</p>
+      <div class="rec-card-foot">
+        <a class="btn-link-primary" href="details.html?id=${encodeURIComponent(item.id)}&from=rec" onclick="recSendEvent('click', '${placement}')">查看詳情</a>
+      </div>
+    </div>`;
 }
 
 // ---------------- 首頁 ----------------
@@ -127,7 +145,7 @@ async function renderHomeRecommendations() {
         + top.map(i => `${i.name} ${i.share}%`).join('、') + '（只在你的瀏覽器計算）';
       const params = new URLSearchParams({ names: top.map(i => i.name).join(','), limit: '30' });
       const res = await fetch(`${API_BASE}/api/recommend/industries?${params}`, { signal });
-      if (!res.ok) throw new Error();
+      if (!res.ok) throw new Error(httpErrorReason(res.status, await res.json().catch(() => ({}))));
       const { groups } = await res.json();
       html = (groups || []).map(g => {
         const items = g.items.filter(i => !profile.seen.has(i.id)).slice(0, REC_PER_GROUP);
@@ -141,7 +159,7 @@ async function renderHomeRecommendations() {
       const etfId = profile.etfs[0];
       reasonEl.textContent = `你還沒有查詢個股，先從你查詢過的 ${etfId} 成分股開始（依持股權重）。`;
       const res = await fetch(`${API_BASE}/api/etf/${encodeURIComponent(etfId)}`, { signal });
-      if (!res.ok) throw new Error();
+      if (!res.ok) throw new Error(httpErrorReason(res.status, await res.json().catch(() => ({}))));
       const data = await res.json();
       const items = (data.holdings || [])
         .filter(h => h.stockId && !profile.seen.has(h.stockId))
@@ -154,7 +172,7 @@ async function renderHomeRecommendations() {
       // 冷啟動 2：沒有任何查詢紀錄 → 其他使用者最近查詢的公司
       reasonEl.textContent = '你還沒有查詢紀錄，以下是其他使用者最近查詢過的公司。';
       const res = await fetch(`${API_BASE}/api/recommend/popular?limit=9`, { signal });
-      if (!res.ok) throw new Error();
+      if (!res.ok) throw new Error(httpErrorReason(res.status, await res.json().catch(() => ({}))));
       const { items } = await res.json();
       html = items && items.length
         ? `<div class="rec-grid">${items.map(i => recCardHtml(i, 'home')).join('')}</div>`
@@ -166,7 +184,7 @@ async function renderHomeRecommendations() {
     if (contentEl.querySelector('.rec-card')) recImpressionOnce('home', 'page');
   } catch (err) {
     if (err.name === 'AbortError') return;
-    contentEl.innerHTML = '<p class="section-hint">推薦暫時無法載入。 <button class="btn-outline" onclick="renderHomeRecommendations()">重試</button></p>';
+    contentEl.innerHTML = `<p class="section-hint">推薦無法載入：${escapeHtml(fetchErrorReason(err))} <button class="btn-outline" onclick="renderHomeRecommendations()">重試</button></p>`;
     footerEl.innerHTML = '';
   }
 }
@@ -196,7 +214,7 @@ async function loadDetailPeers(stockId) {
 
   try {
     const res = await fetch(`${API_BASE}/api/recommend/peers/${encodeURIComponent(stockId)}?limit=30`, { signal: recPeersController.signal });
-    if (!res.ok) throw new Error();
+    if (!res.ok) throw new Error(httpErrorReason(res.status, await res.json().catch(() => ({}))));
     const data = await res.json();
     if (!data.items || !data.items.length) {
       listEl.innerHTML = '<p class="section-hint">找不到同產業的上市櫃公司。</p>';
@@ -212,6 +230,6 @@ async function loadDetailPeers(stockId) {
     recImpressionOnce('detail', stockId);
   } catch (err) {
     if (err.name === 'AbortError') return;
-    listEl.innerHTML = `<p class="section-hint">同類型公司暫時無法載入。 <button class="btn-outline" onclick="loadDetailPeers('${stockId}')">重試</button></p>`;
+    listEl.innerHTML = `<p class="section-hint">同類型公司無法載入：${escapeHtml(fetchErrorReason(err))} <button class="btn-outline" onclick="loadDetailPeers('${stockId}')">重試</button></p>`;
   }
 }

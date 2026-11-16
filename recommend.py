@@ -5,6 +5,7 @@
 - 使用者的興趣輪廓在瀏覽器計算，後端只收到產業名稱，不收到使用者查過哪些股票。
 - 點擊與回饋只記錄匿名的每日合計（不含 IP、股票代號），存在 raw_finmind（stock_id = "STATS"）。
 """
+import os
 import re
 import threading
 import time
@@ -21,6 +22,108 @@ FLUSH_INTERVAL = 300          # 回饋計數最多每 5 分鐘寫回資料庫一
 MAX_INDUSTRIES = 5
 MAX_PER_INDUSTRY = 30
 TW_TZ = timezone(timedelta(hours=8))
+
+# 背景預先載入：推薦清單中還沒有財報資料的公司，排進佇列慢慢抓，使用者點進去就能立即查看。
+# 每檔完整抓取花 4 次 FinMind API（免費帳號每小時 600 次），所以限制速度與每日數量，把額度留給使用者查詢。
+def _env_int(name, default):
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+PREFETCH_ENABLED = os.getenv("REC_PREFETCH", "1") != "0"
+PREFETCH_INTERVAL = _env_int("REC_PREFETCH_INTERVAL", 20)        # 兩檔之間至少相隔幾秒
+PREFETCH_PER_HOUR = _env_int("REC_PREFETCH_PER_HOUR", 20)        # 每小時最多 20 檔（80 次 API）
+PREFETCH_DAILY_CAP = _env_int("REC_PREFETCH_DAILY_CAP", 60)      # 每天最多 60 檔
+PREFETCH_QUEUE_MAX = 60
+PREFETCH_PER_REQUEST = 10                                        # 每次推薦請求最多排入幾檔
+PREFETCH_FAIL_PAUSE = 600                                        # 抓取失敗（FinMind 異常、額度滿）時暫停 10 分鐘
+
+
+class Prefetcher:
+    """單一背景執行緒，依序替推薦清單中的公司預先建立財報資料"""
+
+    def __init__(self, fetch_fn, on_done):
+        self.fetch_fn = fetch_fn          # fetch_fn(stock_id) -> (ok: bool, retryable: bool)
+        self.on_done = on_done            # 成功後通知（更新「已有資料」清單）
+        self.queue = []
+        self.queued = set()
+        self.failed = set()               # 抓不到（例如查無財報）的公司不再重試
+        self.cond = threading.Condition()
+        self.hour_log = []
+        self.day = None
+        self.day_count = 0
+        self.paused_until = 0
+        self.thread = None
+
+    def _quota_left(self):
+        now = time.time()
+        self.hour_log = [t for t in self.hour_log if now - t < 3600]
+        today = datetime.now(TW_TZ).strftime("%Y-%m-%d")
+        if today != self.day:
+            self.day, self.day_count = today, 0
+        return len(self.hour_log) < PREFETCH_PER_HOUR and self.day_count < PREFETCH_DAILY_CAP
+
+    def enqueue(self, stock_ids):
+        """回傳實際在佇列中的代號（前端顯示「資料準備中」）"""
+        if not PREFETCH_ENABLED or self.fetch_fn is None:
+            return set()
+        with self.cond:
+            if not self._quota_left():
+                return set(self.queued)
+            for sid in stock_ids:
+                if sid in self.queued or sid in self.failed or len(self.queue) >= PREFETCH_QUEUE_MAX:
+                    continue
+                self.queue.append(sid)
+                self.queued.add(sid)
+            if self.queue and (self.thread is None or not self.thread.is_alive()):
+                self.thread = threading.Thread(target=self._run, daemon=True, name="rec-prefetch")
+                self.thread.start()
+            self.cond.notify()
+            return set(self.queued)
+
+    def is_queued(self, sid):
+        return sid in self.queued
+
+    def status(self):
+        with self.cond:
+            self._quota_left()
+            return {"enabled": PREFETCH_ENABLED, "queued": len(self.queue), "lastHour": len(self.hour_log),
+                    "today": self.day_count, "perHour": PREFETCH_PER_HOUR, "dailyCap": PREFETCH_DAILY_CAP,
+                    "pausedSeconds": max(0, int(self.paused_until - time.time()))}
+
+    def _run(self):
+        while True:
+            with self.cond:
+                while not self.queue:
+                    if not self.cond.wait(timeout=600):
+                        return  # 閒置 10 分鐘就結束執行緒，下次有推薦請求再啟動
+                wait = max(self.paused_until - time.time(), 0)
+                if not self._quota_left():
+                    wait = max(wait, 60)
+            if wait:
+                time.sleep(min(wait, 60))
+                continue
+            with self.cond:
+                sid = self.queue.pop(0)
+            try:
+                ok, retryable = self.fetch_fn(sid)
+            except Exception as e:
+                print(f"[REC] 預先載入 {sid} 發生錯誤: {e}")
+                ok, retryable = False, True
+            with self.cond:
+                self.queued.discard(sid)
+                if ok:
+                    self.hour_log.append(time.time())
+                    self.day_count += 1
+                elif retryable:
+                    self.paused_until = time.time() + PREFETCH_FAIL_PAUSE
+                else:
+                    self.failed.add(sid)
+            if ok:
+                print(f"[REC] 預先載入完成: {sid}")
+                self.on_done(sid)
+            time.sleep(PREFETCH_INTERVAL)
 
 COMMON_STOCK_RE = re.compile(r"^[1-9][0-9]{3}$")   # 四碼普通股（排除 00 開頭的 ETF、特別股、權證）
 STOCK_ID_RE = re.compile(r"^[0-9]{4,6}[A-Z]?$")
@@ -44,8 +147,9 @@ def normalize_industry(name):
 
 
 class Recommender:
-    def __init__(self, supabase, get_industry_map, get_price_map):
+    def __init__(self, supabase, get_industry_map, get_price_map, prefetch_fn=None):
         self.supabase = supabase
+        self.prefetcher = Prefetcher(prefetch_fn, self._mark_cached)
         self.get_industry_map = get_industry_map
         self.get_price_map = get_price_map
         self.universe_cache = TTLCache(ttl=3600, maxsize=1)
@@ -108,9 +212,22 @@ class Recommender:
         self.cached_ids_cache.set("ids", ids)
         return ids
 
+    def _mark_cached(self, sid):
+        ids = self.cached_ids_cache.get("ids")
+        if ids is not None:
+            ids.add(sid)
+
     def _card(self, sid, stocks, cached):
         info = stocks.get(sid) or {}
-        return {"id": sid, "name": info.get("name", ""), "industries": info.get("industries", []), "hasData": sid in cached}
+        has = sid in cached
+        return {"id": sid, "name": info.get("name", ""), "industries": info.get("industries", []), "hasData": has,
+                "preparing": (not has) and self.prefetcher.is_queued(sid)}
+
+    def _prefetch(self, sids, cached):
+        """把推薦清單前段中還沒有資料的公司排進背景預先載入"""
+        missing = [s for s in sids if s not in cached][:PREFETCH_PER_REQUEST]
+        if missing:
+            self.prefetcher.enqueue(missing)
 
     def _order(self, sids, cached):
         # 已有快取的排前面（點進去比較快、不耗 FinMind 額度），其餘依代號；不依任何財務表現排序
@@ -129,6 +246,7 @@ class Recommender:
                 if sid != stock_id:
                     shared[sid] = shared.get(sid, 0) + 1
         ordered = sorted(shared, key=lambda s: (-shared[s], s not in cached, s))
+        self._prefetch(ordered[:limit], cached)
         return {"stockId": stock_id, "industries": mine, "total": len(shared),
                 "items": [self._card(s, stocks, cached) for s in ordered[:limit]]}
 
@@ -141,6 +259,7 @@ class Recommender:
             if not ind or any(g["industry"] == ind for g in groups):
                 continue
             sids = self._order(by_industry.get(ind, []), cached)
+            self._prefetch(sids[:limit], cached)
             groups.append({"industry": ind, "total": len(sids), "items": [self._card(s, stocks, cached) for s in sids[:limit]]})
         return groups
 
@@ -223,8 +342,8 @@ class Recommender:
         return {"days": days, "totals": totals, "daily": daily}
 
 
-def register_recommend(app, supabase=None, get_industry_map=None, get_price_map=None):
-    rec = Recommender(supabase, get_industry_map, get_price_map)
+def register_recommend(app, supabase=None, get_industry_map=None, get_price_map=None, prefetch_fn=None):
+    rec = Recommender(supabase, get_industry_map, get_price_map, prefetch_fn)
     bp = Blueprint("recommend_bp", __name__)
 
     def parse_limit(default, maximum):
@@ -266,7 +385,9 @@ def register_recommend(app, supabase=None, get_industry_map=None, get_price_map=
             days = max(1, min(int(request.args.get("days", 30)), EVENTS_KEEP_DAYS))
         except (TypeError, ValueError):
             days = 30
-        return jsonify(rec.stats(days))
+        out = rec.stats(days)
+        out["prefetch"] = rec.prefetcher.status()
+        return jsonify(out)
 
     app.register_blueprint(bp)
     return rec

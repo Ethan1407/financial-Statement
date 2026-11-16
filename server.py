@@ -1291,7 +1291,21 @@ register_news(app, supabase=supabase)
 register_etf(app, supabase=supabase, get_holding_details=get_holding_details)
 register_quotes(app, get_industry_map=get_industry_map)
 conference_store = register_mops(app, supabase=supabase)
-recommender = register_recommend(app, supabase=supabase, get_industry_map=get_industry_map, get_price_map=get_price_map)
+def prefetch_financials(stock_id):
+    """推薦清單的背景預先載入：只在資料庫可用時抓（結果要存進資料庫才有意義），並放進記憶體快取。
+    回傳 (成功, 可重試)。保留使用者自己查詢的每日額度：已用超過七成就先不抓。"""
+    if supabase is None or not db_available():
+        return False, True
+    if daily_fetches >= FULL_FETCH_DAILY_CAP * 0.7:
+        return False, True
+    result, err_msg, status_code = process_financials(stock_id)
+    if err_msg:
+        return False, status_code not in (404,)
+    memory_cache.set(f"{stock_id}_v{CALC_VERSION}", result)
+    return True, False
+
+recommender = register_recommend(app, supabase=supabase, get_industry_map=get_industry_map, get_price_map=get_price_map,
+                                 prefetch_fn=prefetch_financials)
 
 if __name__ == '__main__':
     is_debug = os.getenv("FLASK_DEBUG", "False").lower() == "true"

@@ -156,6 +156,40 @@ def parse_bing_rss(content, max_age_days):
     return items
 
 
+def parse_yahoo_rss(content, max_age_days):
+    root = ET.fromstring(content)
+    items = []
+    for item in root.findall(".//item"):
+        it = _make_item(item.findtext("title", ""), item.findtext("link", ""),
+                        item.findtext("pubDate", ""), "Yahoo股市", max_age_days)
+        if it:
+            items.append(it)
+    return items
+
+
+def fetch_yahoo_news(stock_id, period_days=30, diag=None):
+    """Yahoo 股市的個股新聞 RSS（上市、上櫃都用 .TW 查得到）。
+    Google / Bing 偶爾會擋雲端主機的 IP，多一個來源讓新聞不容易整個查不到。失敗回傳 None。"""
+    url = f"https://tw.stock.yahoo.com/rss?s={urllib.parse.quote(stock_id)}.TW"
+    resp, err = _http_get(url)
+    if resp is None:
+        if diag is not None:
+            diag["yahoo"] = {"ok": False, "error": err}
+        print(f"[News] yahoo 失敗 ({stock_id}): {err}")
+        return None
+    try:
+        items = parse_yahoo_rss(resp.content, period_days)
+    except Exception as e:
+        if diag is not None:
+            diag["yahoo"] = {"ok": False, "error": f"解析失敗 {type(e).__name__}: {e}", "head": resp.text[:120]}
+        print(f"[News] yahoo 解析失敗 ({stock_id}): {e}")
+        return None
+    if diag is not None:
+        diag["yahoo"] = {"ok": True, "items": len(items)}
+    print(f"[News] yahoo 成功 ({stock_id}): {len(items)} 則")
+    return items
+
+
 def fetch_news(query, period_days=30, diag=None):
     """先用 Google News RSS，沒結果或失敗再用 Bing News RSS。
     回傳 list（可能為空），兩邊都連線失敗才回傳 None。diag 若提供，會記錄每個來源的狀態。"""
@@ -244,10 +278,15 @@ def process_news(stock_id, supabase, force_refresh):
 
         fetch_failed = False
         all_items = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             futures = [executor.submit(fetch_news, q, 30) for q in queries]
+            futures.append(executor.submit(fetch_yahoo_news, stock_id, 30))
             for future in futures:
-                res = future.result()
+                try:
+                    res = future.result()
+                except Exception as e:
+                    print(f"[{stock_id}] 新聞抓取例外: {e}")
+                    res = None
                 if res is None:
                     fetch_failed = True
                 else:
@@ -330,7 +369,9 @@ def register_news(app, supabase=None):
         queries, _ = build_queries(name, stock_id)
         diag = {}
         items = fetch_news(queries[0], 30, diag)
+        yahoo = fetch_yahoo_news(stock_id, 30, diag)
         return jsonify({"name": name, "query": queries[0], "sources": diag,
-                        "itemCount": None if items is None else len(items)})
+                        "itemCount": None if items is None else len(items),
+                        "yahooCount": None if yahoo is None else len(yahoo)})
 
     app.register_blueprint(news_bp)
