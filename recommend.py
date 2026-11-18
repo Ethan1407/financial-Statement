@@ -18,7 +18,7 @@ EVENTS_DATASET = "rec_events"
 EVENT_TYPES = ("impression", "click", "helpful", "unhelpful")
 PLACEMENTS = ("home", "detail")
 EVENTS_KEEP_DAYS = 120
-FLUSH_INTERVAL = 300          # 回饋計數最多每 5 分鐘寫回資料庫一次
+FLUSH_INTERVAL = 300          # 非強制寫回時的最短間隔（目前每筆事件都強制立即寫入）
 MAX_INDUSTRIES = 5
 MAX_PER_INDUSTRY = 30
 TW_TZ = timezone(timedelta(hours=8))
@@ -316,7 +316,8 @@ class Recommender:
             bucket = self.events.setdefault(day, {}).setdefault(placement, {})
             bucket[event] = bucket.get(event, 0) + 1
             self.dirty = True
-            self._flush()
+            # Render 免費方案閒置 15 分鐘會睡眠，記憶體裡還沒寫回的計數會遺失；流量不大，每筆立即寫入 Supabase
+            self._flush(force=True)
 
     def stats(self, days):
         with self.events_lock:

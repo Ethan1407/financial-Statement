@@ -478,9 +478,16 @@ function generateSummary(alerts, skipped, status, quarters) {
     let ending = '以上為依財報數據自動產生的整理，不構成投資建議。';
 
     let detail = `${statusText} ${prosText} ${concernsText} ${missingText} ${ending}`.trim();
-    let shortPros = prosSelected.length > 0 ? prosSelected[0] : '無特別亮點';
-    let shortAlerts = alerts.length > 0 ? `${alerts.length}項警訊` : '無警訊';
-    let short = `${status==='green'?'健康':(status==='red'?'警戒':'注意')}｜${shortPros}｜${shortAlerts}`;
+    // 卡片摘要：有警訊時列出最嚴重的警訊（紅燈優先），沒有警訊才列優點，避免紅燈公司卻只看到優點
+    const label = status === 'green' ? '健康' : (status === 'red' ? '警戒' : '注意');
+    let short;
+    if (alerts.length > 0) {
+        const lvl = a => a.detail && a.detail.level || a.rule.level;
+        const worst = alerts.slice().sort((a, b) => (lvl(b) === 'red') - (lvl(a) === 'red')).slice(0, 2).map(a => a.rule.name);
+        short = `${label}｜${worst.join('、')}${alerts.length > worst.length ? ` 等 ${alerts.length} 項警訊` : ''}`;
+    } else {
+        short = `${label}｜${prosSelected.length > 0 ? prosSelected[0] : '無特別亮點'}｜無警訊`;
+    }
 
     return { detail, short };
 }

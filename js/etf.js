@@ -22,6 +22,7 @@ function storeEtfResult(id, result) {
         // 成分股代號 → 權重，推薦原因用來判斷「你查詢的 ETF 也持有」
         holdings: Object.fromEntries(holdings.filter(h => h.stockId).map(h => [h.stockId, h.weight])),
         fetchedAt: result.fetchedAt,
+        _syncedAt: Date.now(),
         risk: etfRiskSnapshot(computeEtfRisk(holdings))
     };
     return saveStockDatabase(stockDatabase);
@@ -218,6 +219,8 @@ async function renderEtfView(etfId) {
         
         if (res.ok) {
             etfData = await res.json();
+            // 詳情頁拿到最新成分股時，一併更新首頁卡片用的摘要，兩邊的「已查詢 x / 50 檔」才會一致
+            if (loadStockDatabase()[etfId]) storeEtfResult(etfId, etfData);
         } else {
             fetchError = '伺服器錯誤';
         }

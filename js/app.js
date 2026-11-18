@@ -115,6 +115,7 @@ function checkBackendAwake() {
     } else {
       setServerStatus('offline', '無法連線', networkErrorReason());
     }
+    if (ok) autoSyncStale();
     if (ok) {
       if (!banner) return; // 主機本來就醒著，不顯示橫幅
       setBanner('ready', `✅ 主機已啟動（花了 ${elapsedSec()} 秒），可以正常使用了。`);
@@ -177,6 +178,85 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && backendLastOkAt && Date.now() - backendLastOkAt > BACKEND_RECHECK_MS) checkBackendAwake();
 });
 
+// ================= 瀏覽器資料自動同步 =================
+// 財報存在瀏覽器（localStorage），以前只有按「更新」才會重抓，資料會一直停在當初查詢的那天。
+// 現在主機連上後，自動向後端同步「太久沒同步」或「財報季落後」的股票。後端會依自己的檢查週期
+// （財報季每 6 小時、平常每 3 天）決定要不要向 FinMind 抓新資料，所以這裡頻繁同步也不會多耗額度。
+const SYNC_MAX_AGE_MS = 6 * 3600 * 1000;      // 超過 6 小時沒同步就同步
+const SYNC_BEHIND_AGE_MS = 1 * 3600 * 1000;   // 財報季落後時，每小時同步一次
+const SYNC_BATCH_SIZE = 20;                   // 後端 /api/stocks 一次最多 20 檔
+const SYNC_MAX_ETFS = 3;
+let autoSyncDone = false;
+
+// 依法定申報期限推算「現在應該已經公布」的最新財報季：
+// 年報 3/31、Q1 5/15、Q2 8/14、Q3 11/14（期限隔天起視為應已公布）
+function expectedLatestQuarter(now = new Date()) {
+  const y = now.getFullYear(), md = (now.getMonth() + 1) * 100 + now.getDate();
+  if (md >= 1115) return `${y}Q3`;
+  if (md >= 815) return `${y}Q2`;
+  if (md >= 516) return `${y}Q1`;
+  if (md >= 401) return `${y - 1}Q4`;
+  return `${y - 1}Q3`;
+}
+
+function lastSyncedAt(data) {
+  if (data._syncedAt) return data._syncedAt;
+  const t = Date.parse((data.meta && data.meta.checkedAt) || data.fetchedAt || '');
+  return isNaN(t) ? 0 : t;
+}
+
+function needsSync(data, now = Date.now()) {
+  const age = now - lastSyncedAt(data);
+  if (age > SYNC_MAX_AGE_MS) return true;
+  const behind = !data.isEtf && data.latestCompleteQuarter && data.latestCompleteQuarter < expectedLatestQuarter();
+  return behind && age > SYNC_BEHIND_AGE_MS;
+}
+
+async function autoSyncStale() {
+  if (autoSyncDone || seedingDefaults) return;
+  autoSyncDone = true;
+  const db = loadStockDatabase();
+  const byPriority = ids => ids.sort((a, b) => (portfolio.includes(b) - portfolio.includes(a)) || a.localeCompare(b));
+  const stocks = byPriority(Object.keys(db).filter(id => db[id] && !db[id].isEtf && needsSync(db[id])));
+  // ETF 回應較大，只同步自選的
+  const etfs = typeof requestEtf === 'function'
+    ? byPriority(Object.keys(db).filter(id => db[id] && db[id].isEtf && portfolio.includes(id) && needsSync(db[id]))).slice(0, SYNC_MAX_ETFS)
+    : [];
+  if (!stocks.length && !etfs.length) return;
+
+  const updated = [];
+  for (let i = 0; i < stocks.length; i += SYNC_BATCH_SIZE) {
+    const chunk = stocks.slice(i, i + SYNC_BATCH_SIZE);
+    try {
+      const res = await fetch(`${API_BASE}/api/stocks?ids=${chunk.join(',')}`);
+      if (!res.ok) break;   // 429 等錯誤：下次開網頁再試
+      const { results } = await res.json();
+      const next = loadStockDatabase();
+      Object.entries(results || {}).forEach(([id, result]) => {
+        if (!next[id]) return;   // 同步期間被使用者刪除
+        result._syncedAt = Date.now();
+        next[id] = result;
+        updated.push(id);
+      });
+      if (!saveStockDatabase(next)) break;
+    } catch { break; }
+  }
+  for (const id of etfs) {
+    const { error } = await requestEtf(id);
+    if (!error) updated.push(id);
+  }
+  if (!updated.length) return;
+
+  rerenderCurrentPage();
+  if (typeof initRules === 'function' && document.getElementById('info-q')) initRules();
+  // 個股詳情正在看的股票也重畫（不重抓新聞）
+  const content = document.getElementById('detail-content');
+  if (window.currentStockId && updated.includes(window.currentStockId) && content && content.style.display !== 'none'
+      && !(loadStockDatabase()[window.currentStockId] || {}).isEtf) {
+    loadDetailView(window.currentStockId, true);
+  }
+}
+
 function isEtfId(id) { return /^00\d{2,4}[A-Za-z]?$/.test(id || ''); }
 
 // 預設自選股的靜態快照（data/seed/，由 GitHub Actions 每天更新），跟網頁一起放在 Vercel，
@@ -209,6 +289,7 @@ async function seedDefaultPortfolio() {
   }));
   if (results.every(r => !r.error)) savePortfolio();
   seedingDefaults = false;
+  if (backendLastOkAt) autoSyncStale();
   rerenderCurrentPage();
 }
 
@@ -270,6 +351,7 @@ async function requestStock(id, refresh = false) {
       if (!response.ok) return { error: result.error || '查詢失敗，請確認代號正確', status: response.status };
 
       const stockDatabase = loadStockDatabase();
+      result._syncedAt = Date.now();
       stockDatabase[id] = result;
       if (!saveStockDatabase(stockDatabase)) {
           return { error: '瀏覽器儲存空間已滿，請先刪除部分「其他已查詢股票」。', status: 'storage' };
@@ -1268,16 +1350,21 @@ function toggleConfExpand() {
   renderConferences();
 }
 
-// 觀測站的簡報下載是送出表單（POST），不是一般網址。由使用者的瀏覽器送出與觀測站頁面相同的表單，
-// 在新分頁開啟官方檔案；本站不經手、也不保存檔案。
-const MOPS_FILE_RE = /^[A-Za-z0-9_-]+\.(pdf|pptx?|PDF|PPTX?)$/;
-function openMopsSlide(fileName) {
-  if (!MOPS_FILE_RE.test(fileName)) return;
+// 觀測站查詢頁（法說會一覽、重大訊息）：由使用者的瀏覽器送出與觀測站相同的查詢表單，在新分頁顯示該公司今年的結果
+const MOPS_QUERY_PAGES = new Set(['t100sb02_1', 't05st01']);
+function openMopsQuery(page, stockId) {
+  if (!MOPS_QUERY_PAGES.has(page) || !/^[0-9]{4,6}[A-Z]?$/.test(stockId)) return;
+  submitMopsForm(`https://mopsov.twse.com.tw/mops/web/ajax_${page}`, {
+    encodeURIComponent: '1', step: '1', firstin: '1', off: '1', queryName: 'co_id', inpuType: 'co_id',
+    TYPEK: 'all', isnew: 'true', co_id: stockId, year: String(new Date().getFullYear() - 1911), month: 'all'
+  });
+}
+
+function submitMopsForm(action, fields) {
   const form = document.createElement('form');
   form.method = 'POST';
-  form.action = 'https://mopsov.twse.com.tw/server-java/FileDownLoad';
+  form.action = action;
   form.target = '_blank';
-  const fields = { step: '9', filePath: '/home/html/nas/STR/', fileName, functionName: 't100sb02_1' };
   Object.entries(fields).forEach(([name, value]) => {
       const input = document.createElement('input');
       input.type = 'hidden';
@@ -1288,6 +1375,14 @@ function openMopsSlide(fileName) {
   document.body.appendChild(form);
   form.submit();
   form.remove();
+}
+
+// 觀測站的簡報下載是送出表單（POST），不是一般網址。由使用者的瀏覽器送出與觀測站頁面相同的表單，
+// 在新分頁開啟官方檔案；本站不經手、也不保存檔案。
+const MOPS_FILE_RE = /^[A-Za-z0-9_-]+\.(pdf|pptx?|PDF|PPTX?)$/;
+function openMopsSlide(fileName) {
+  if (!MOPS_FILE_RE.test(fileName)) return;
+  submitMopsForm('https://mopsov.twse.com.tw/server-java/FileDownLoad', { step: '9', filePath: '/home/html/nas/STR/', fileName, functionName: 't100sb02_1' });
 }
 
 function safeHttpUrl(url) {
@@ -1367,14 +1462,20 @@ function renderOfficialLinks(stockId) {
     { title: `股東會年報（${roc - 1} 年）`, desc: `去年股東會資料，含 ${roc - 2} 年度年報`, url: docUrl(roc - 1, 'F') },
     { title: `財務報告書（${roc} 年）`, desc: '會計師查核／核閱的完整財報 PDF', url: docUrl(roc, 'A') },
     { title: `財務報告書（${roc - 1} 年）`, desc: '去年各季與年度財報 PDF', url: docUrl(roc - 1, 'A') },
-    { title: '法人說明會', desc: `公開資訊觀測站法說會一覽表，請輸入代號 ${stockId} 查詢`, url: 'https://mopsov.twse.com.tw/mops/web/t100sb02_1' },
-    { title: '重大訊息', desc: `公開資訊觀測站重大訊息，請輸入代號 ${stockId} 查詢`, url: 'https://mopsov.twse.com.tw/mops/web/t05st01' }
+    // 觀測站查詢是送出表單（POST），用 openMopsQuery 帶入代號後在新分頁開啟結果
+    { title: '法人說明會', desc: `公開資訊觀測站 ${stockId} 今年的法說會（已帶入代號）`, mops: 't100sb02_1' },
+    { title: '重大訊息', desc: `公開資訊觀測站 ${stockId} 今年的重大訊息（已帶入代號，舊到新排列）`, mops: 't05st01' }
   ];
-  el.innerHTML = links.map(l => `
-    <a class="link-item" href="${l.url}" target="_blank" rel="noopener noreferrer">
-      <strong>${escapeHtml(l.title)} ↗</strong>
-      <span>${escapeHtml(l.desc)}</span>
-    </a>`).join('');
+  el.innerHTML = links.map(l => l.mops
+    ? `<a class="link-item" href="https://mopsov.twse.com.tw/mops/web/${l.mops}" target="_blank" rel="noopener noreferrer"
+          onclick="event.preventDefault(); openMopsQuery('${l.mops}', '${escapeHtml(stockId)}')">
+        <strong>${escapeHtml(l.title)} ↗</strong>
+        <span>${escapeHtml(l.desc)}</span>
+      </a>`
+    : `<a class="link-item" href="${l.url}" target="_blank" rel="noopener noreferrer">
+        <strong>${escapeHtml(l.title)} ↗</strong>
+        <span>${escapeHtml(l.desc)}</span>
+      </a>`).join('');
 }
 
 // ==========================================
