@@ -365,3 +365,84 @@ main.has-toc { max-width: 1460px; }
   .page-toc.editing .toc-move { flex-direction: row; }
   .toc-move-up, .toc-move-down { transform: rotate(-90deg); }
 }
+
+/* ================= 頁內提示（取代 alert） ================= */
+#toast-container { position: fixed; right: 16px; bottom: 16px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px)); }
+.toast { display: flex; align-items: flex-start; gap: 10px; padding: 12px 12px 12px 14px; border-radius: 8px; background: var(--card-bg); color: var(--text); border: 1px solid var(--border); border-left: 4px solid var(--primary); box-shadow: 0 6px 20px rgba(0,0,0,0.25); font-size: 0.92rem; line-height: 1.5; animation: toast-in 0.2s ease-out; }
+.toast.success { border-left-color: var(--green); }
+.toast.warn { border-left-color: var(--yellow); }
+.toast.error { border-left-color: var(--red); }
+.toast.leaving { opacity: 0; transform: translateY(6px); transition: 0.2s; }
+.toast-text { flex: 1; white-space: pre-line; }
+.toast-close { background: transparent; color: var(--text-light); padding: 0 4px; font-size: 1.1rem; line-height: 1; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+/* ================= 確認框（取代 confirm、prompt） ================= */
+.modal-backdrop { position: fixed; inset: 0; z-index: 1100; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.modal { width: min(420px, 100%); background: var(--card-bg); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 20px; box-shadow: 0 12px 32px rgba(0,0,0,0.35); }
+.modal-text { white-space: pre-line; line-height: 1.6; margin-bottom: 16px; }
+.modal-input { width: 100%; margin-bottom: 16px; min-height: 40px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.modal-actions button { min-height: 40px; min-width: 80px; }
+button.btn-danger { background-color: var(--red); color: #fff; }
+
+/* ================= 財務名詞說明 ⓘ ================= */
+.term-info { background: transparent; color: var(--text-light); padding: 0 3px; margin-left: 2px; font-size: 0.85em; font-weight: normal; line-height: 1; vertical-align: baseline; }
+.term-info:hover, .term-info:focus-visible { color: var(--primary); }
+#term-popover { position: fixed; z-index: 1050; width: min(300px, calc(100vw - 24px)); background: var(--card-bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); font-size: 0.88rem; line-height: 1.55; }
+#term-popover strong { display: block; margin-bottom: 4px; color: var(--primary); }
+#term-popover p { margin: 0; font-weight: normal; }
+
+/* ================= 股票代號／名稱自動完成 ================= */
+.stock-search { display: flex; gap: 8px; flex-wrap: wrap; }
+.ac-wrap { position: relative; flex: 1 1 240px; min-width: 0; }
+.ac-wrap input { width: 100%; min-height: 40px; }
+.ac-list { display: none; position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 300; list-style: none; margin: 0; padding: 4px; background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 8px 20px rgba(0,0,0,0.25); max-height: 320px; overflow-y: auto; }
+.ac-list li { display: flex; gap: 10px; padding: 9px 10px; border-radius: 4px; cursor: pointer; }
+.ac-list li.active, .ac-list li:hover { background: rgba(59, 130, 246, 0.12); }
+.ac-id { font-weight: bold; min-width: 52px; color: var(--primary); }
+.ac-name { color: var(--text); }
+.stock-input-hint { min-height: 0; margin-top: 6px; font-size: 0.85rem; color: var(--text-light); }
+.stock-input-hint:empty { display: none; }
+.stock-input-hint.error { color: var(--red); }
+
+/* ================= 個股詳情：變好最多／變差最多 ================= */
+.change-compare { display: flex; gap: 16px; margin-top: 16px; }
+.change-box { flex: 1; min-width: 0; background: var(--bg); padding: 12px; border-radius: 6px; border: 1px solid var(--border); }
+.change-row { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 0.9rem; }
+.change-row > span:first-child { flex-shrink: 0; }
+.change-val { text-align: right; overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .change-compare { flex-direction: column; }
+}
+
+/* ================= 導覽列：桌機顯示完整名稱，手機改為底部分頁列 ================= */
+.nav-icon, .nav-short { display: none; }
+@media (max-width: 640px) {
+  .nav-links {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 200; order: 0; width: auto; max-width: none;
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; overflow: visible; white-space: normal;
+    padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); background-color: var(--nav-bg);
+    border-top: 1px solid var(--border); box-shadow: 0 -2px 10px rgba(0,0,0,0.15);
+  }
+  .nav-links a { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; font-size: 0.72rem; line-height: 1.2; text-align: center; border-radius: 6px; min-width: 0; }
+  .nav-icon { display: block; font-size: 1.15rem; line-height: 1.2; }
+  .nav-full { display: none; }
+  .nav-short { display: block; white-space: nowrap; }
+  /* 底部分頁列會蓋住頁面最下方，留出空間 */
+  body { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  #toast-container { left: 16px; right: 16px; bottom: calc(76px + env(safe-area-inset-bottom)); max-width: none; }
+}
+
+/* ================= 投資組合健檢：手機版表格隱藏次要欄位，不必左右捲動 ================= */
+@media (max-width: 640px) {
+  .xray-table { min-width: 0; font-size: 0.85rem; }
+  .xray-table th, .xray-table td { padding: 8px 6px; }
+  /* 持倉明細：隱藏股數、收盤價（保留市值與佔比） */
+  .xray-sources th:nth-child(3), .xray-sources td:nth-child(3),
+  .xray-sources th:nth-child(4), .xray-sources td:nth-child(4) { display: none; }
+  /* 底層個股明細：隱藏序號、產業、曝險金額（保留公司、真實權重、來源） */
+  .xray-stocks th:nth-child(1), .xray-stocks td:nth-child(1),
+  .xray-stocks th:nth-child(3), .xray-stocks td:nth-child(3),
+  .xray-stocks th:nth-child(5), .xray-stocks td:nth-child(5) { display: none; }
+}

@@ -295,7 +295,7 @@ curl -X POST -H "X-Admin-Key: $ADMIN_KEY" http://127.0.0.1:5000/api/admin/clear-
 
 ## 🚦 警訊規則
 
-規則參考帆軟〈[財報分析入門](https://www.fanruan.com/zh-tw/blog/financial-report-analysis-beginners)〉與 PTT Stock〈[財報三表完全解析](https://pttstock.tw/financial-statements/)〉：財務比率沒有跨產業通用的安全值，應比較連續多季趨勢與去年同期。因此多數規則以「連續季數」與「去年同季」判斷。除「營業現金流低於稅後淨利」的 1 倍門檻出自文章外，其餘數字門檻為本系統的設定值，定義在 [js/rules.js](js/rules.js) 的 `RULES_CONFIG`。
+規則參考帆軟軟體〈[財務報表分析完整教學：一篇搞懂三大報表基礎與核心指標](https://www.fanruan.com/zh-tw/blog/financial-report-analysis-beginners)〉與 PTT股票公社〈[【財報三表完全解析】損益表、資產負債表、現金流量表怎麼看？新手選股第一步（2026最新）](https://pttstock.tw/financial-statements/)〉：財務比率沒有跨產業通用的安全值，應比較連續多季趨勢與去年同期。因此多數規則以「連續季數」與「去年同季」判斷。除「營業現金流低於稅後淨利」的 1 倍門檻出自文章外，其餘數字門檻為本系統的設定值，定義在 [js/rules.js](js/rules.js) 的 `RULES_CONFIG`。
 
 <details>
 <summary>完整規則列表（一般類型）</summary>

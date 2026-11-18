@@ -298,6 +298,13 @@ function rerenderCurrentPage() {
   if (document.getElementById('tracked-grid')) renderStockOverview();
   if (document.getElementById('alerts-list')) renderAlerts();
   if (document.getElementById('detail-stock-select')) {
+      // 第一次造訪直接開 details.html?id=2330 時，資料是之後才載入的，載入後補畫個股內容
+      const urlId = new URLSearchParams(window.location.search).get('id');
+      const etfShown = typeof currentEtfId !== 'undefined' && currentEtfId;
+      if (urlId && !window.currentStockId && !etfShown && loadStockDatabase()[urlId]) {
+          initDetails();
+          return;
+      }
       updateDetailSelect();
       if (document.getElementById('detail-list-view').style.display !== 'none') renderDetailStockList();
   }
@@ -366,6 +373,13 @@ async function requestStock(id, refresh = false) {
   }
 }
 
+// 法說會日期：觀測站給的是民國年（115/11/18），統一改成全站使用的西元年（2026/11/18）
+function formatConfDate(item) {
+  const fmt = iso => (iso || '').replace(/-/g, '/');
+  if (!item.date) return item.dateText || '';
+  return item.endDate ? `${fmt(item.date)}～${fmt(item.endDate)}` : fmt(item.date);
+}
+
 function formatDateTime(isoStr) {
   if (!isoStr) return '—';
   const d = new Date(isoStr);
@@ -373,12 +387,18 @@ function formatDateTime(isoStr) {
   return d.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-async function addStock() {
+// 首頁輸入框：支援代號或公司名稱，輸入時列出自動完成清單（js/ui.js）
+let stockInputAc = null;
+document.addEventListener('DOMContentLoaded', () => {
   const input = document.getElementById('stock-input');
-  const id = input.value.trim();
-  if (!id) return;
-  await syncStock(id, input.nextElementSibling, true);
-  input.value = '';
+  if (!input || typeof attachStockAutocomplete !== 'function') return;
+  stockInputAc = attachStockAutocomplete(input,
+    id => syncStock(id, document.getElementById('add-stock-btn'), true),
+    document.getElementById('stock-input-hint'));
+});
+
+async function addStock() {
+  if (stockInputAc) await stockInputAc.submit();
 }
 
 // 查詢或更新財報。已有資料時檢查是否有新財報；addToPortfolio 為 true 時同時加入自選股
@@ -391,18 +411,19 @@ async function syncStock(id, btn, addToPortfolio = false) {
 
   try {
       if (isEtfId(id)) {
-          if (await syncEtf(id, addToPortfolio)) {
+          const ok = await syncEtf(id, addToPortfolio);
+          if (ok) {
               renderStockOverview();
               updateDetailSelect();
           }
-          return;
+          return !!ok;
       }
 
       const oldQuarter = isUpdating ? stockDatabase[id].latestCompleteQuarter : null;
       const { result, error } = await requestStock(id, isUpdating);
       if (error) {
-          alert(error);
-          return;
+          showToast(`${id}：${error}`, 'error', 7000);
+          return false;
       }
 
       const added = addToPortfolio && !portfolio.includes(id);
@@ -413,16 +434,19 @@ async function syncStock(id, btn, addToPortfolio = false) {
 
       if (isUpdating) {
           const newQuarter = result.latestCompleteQuarter;
-          let msg;
-          if (result.meta && result.meta.stale) msg = `⚠️ ${id} 暫時無法連線 FinMind，目前顯示的是上次的資料 (${newQuarter})。`;
+          let msg, type = 'success';
+          if (result.meta && result.meta.stale) { msg = `⚠️ ${id} 暫時無法連線 FinMind，目前顯示的是上次的資料 (${newQuarter})。`; type = 'warn'; }
           else if (oldQuarter && newQuarter > oldQuarter) msg = `🎉 ${id} 已更新到最新一季財報 (${newQuarter})！`;
           else msg = `✅ ${id} 財報已是最新 (${newQuarter})，尚無新財報公布。`;
-          alert(added ? `${msg}\n已加入自選股。` : msg);
+          showToast(added ? `${msg}\n已加入自選股。` : msg, type);
+      } else if (added) {
+          showToast(`✅ 已加入自選股：${id} ${result.name || ''}`, 'success');
       }
 
       renderStockOverview();
       updateDetailSelect();
       fetch(`${API_BASE}/api/monthly/${id}${isUpdating ? '?refresh=1' : ''}`).catch(() => console.log('月營收更新略過'));
+      return true;
   } finally {
       btn.innerText = originalText;
       btn.disabled = false;
@@ -438,15 +462,15 @@ function trackStock(id) {
 }
 
 // 移出自選股：資料保留，移到「其他已查詢股票」
-function removeStock(id) {
-  if (!confirm(`確定將 ${id} 移出自選股？\n資料會保留在「其他已查詢股票」。`)) return;
+async function removeStock(id) {
+  if (!await showConfirm(`確定將 ${id} 移出自選股？\n資料會保留在「其他已查詢股票」。`, { okText: '移出' })) return;
   portfolio = portfolio.filter(item => item !== id);
   savePortfolio();
   renderStockOverview();
 }
 
-function deleteStockData(id) {
-  if (!confirm(`確定刪除 ${id} 的查詢紀錄？`)) return;
+async function deleteStockData(id) {
+  if (!await showConfirm(`確定刪除 ${id} 的查詢紀錄？`, { okText: '刪除', danger: true })) return;
   const stockDatabase = loadStockDatabase();
   delete stockDatabase[id];
   saveStockDatabase(stockDatabase);
@@ -500,13 +524,14 @@ function stockCardHtml(item, isTracked) {
         <span class="status-indicator"><span class="dot ${item.status}"></span> ${statusText}</span>
       </div>
       <div style="font-size: 0.9rem; color: var(--text-light); margin-bottom: 16px;">
-        <div style="display:flex; justify-content:space-between;"><span>最新營收年增:</span> <strong style="color:var(--text)">${fmt(latest.revenueYoY, false, '%')}</strong></div>
-        <div style="display:flex; justify-content:space-between;"><span>毛利率:</span> <strong style="color:var(--text)">${fmt(latest.grossMargin, true, '%')}</strong></div>
-        <div style="display:flex; justify-content:space-between;"><span>負債比:</span> <strong style="color:var(--text)">${fmt(latest.debtRatio, false, '%')}</strong></div>
+        <div style="display:flex; justify-content:space-between;"><span>最新財報:</span> <strong style="color:var(--text)">${escapeHtml(item.data.latestCompleteQuarter || latest.q || '—')}</strong></div>
+        <div style="display:flex; justify-content:space-between;"><span>${termHtml('營收年增', '最新營收年增')}:</span> <strong style="color:var(--text)">${fmt(latest.revenueYoY, false, '%')}</strong></div>
+        <div style="display:flex; justify-content:space-between;"><span>${termHtml('毛利率')}:</span> <strong style="color:var(--text)">${fmt(latest.grossMargin, true, '%')}</strong></div>
+        <div style="display:flex; justify-content:space-between;"><span>${termHtml('負債比')}:</span> <strong style="color:var(--text)">${fmt(latest.debtRatio, false, '%')}</strong></div>
       </div>
       <div class="flex-between" style="margin-bottom: 12px; font-size: 0.85rem; padding-bottom:12px; border-bottom:1px dashed var(--border);">
           <span>觸發警訊數：<strong>${item.alerts.length}</strong> 項</span>
-          <span class="badge" style="background:${riskColor}; color:#fff;">風險分數: ${item.riskScore}</span>
+          <span><span class="badge" style="background:${riskColor}; color:#fff;">風險分數: ${item.riskScore}</span>${termInfoButton('風險分數')}</span>
       </div>
       <div style="font-size: 0.85rem; color: var(--text-light); margin-bottom: 16px;">
           📝 ${item.summary.short}
@@ -1204,20 +1229,20 @@ function generateQoQ(quarters, isFin) {
     const renderItems = (items, colorClass) => {
         if (items.length === 0) return `<p style="color:var(--text-light); font-size:0.9rem;">無明顯變動</p>`;
         return items.map(item => `
-            <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size:0.9rem;">
-                <span>${item.name}</span>
-                <span>${item.prevVal} ➔ ${item.curVal} <span class="${colorClass}">${item.impact > 0 ? '▲' : '▼'} ${item.txt}</span></span>
+            <div class="change-row">
+                <span>${termHtml(item.name)}</span>
+                <span class="change-val">${item.prevVal} ➔ ${item.curVal} <span class="${colorClass}">${item.impact > 0 ? '▲' : '▼'} ${item.txt}</span></span>
             </div>
         `).join('');
     };
 
     return `
-        <div style="display:flex; gap:16px; margin-top:16px;">
-            <div style="flex:1; background:var(--bg); padding:12px; border-radius:6px; border:1px solid var(--border);">
+        <div class="change-compare">
+            <div class="change-box">
                 <h4 style="margin:0 0 12px 0; color:var(--green);">🟢 變好最多</h4>
                 ${renderItems(improved, 'green')}
             </div>
-            <div style="flex:1; background:var(--bg); padding:12px; border-radius:6px; border:1px solid var(--border);">
+            <div class="change-box">
                 <h4 style="margin:0 0 12px 0; color:var(--red);">🔴 變差最多</h4>
                 ${renderItems(worsened, 'red')}
             </div>
@@ -1253,7 +1278,7 @@ function loadDetailView(stockId, skipNews = false) {
   if (plainSummaryEl) {
       plainSummaryEl.innerHTML = `
         <div style="background: var(--bg); padding: 12px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 12px;">
-          <h4 style="margin:0 0 8px 0;">💬 AI 財報白話解析</h4>
+          <h4 style="margin:0 0 8px 0;">💬 白話財報解析</h4>
           <p style="margin:0; color: var(--text-light); line-height: 1.5; font-size: 0.95rem;">${analysis.summary.detail}</p>
         </div>
       `;
@@ -1401,7 +1426,7 @@ function confItemHtml(item, isUpcoming) {
     <div class="conf-item${isUpcoming ? ' upcoming' : ''}">
       <div class="conf-head">
         ${isUpcoming ? '<span class="badge" style="background:var(--primary);">即將舉行</span>' : ''}
-        <span class="conf-date">${escapeHtml(item.dateText || item.date)} ${escapeHtml(item.time || '')}</span>
+        <span class="conf-date">${escapeHtml(formatConfDate(item))} ${escapeHtml(item.time || '')}</span>
         <span class="conf-place">${escapeHtml(item.place || '')}</span>
       </div>
       <div class="conf-summary">${escapeHtml(item.summary || '')}</div>
@@ -1830,6 +1855,7 @@ function renderNews() {
     let msgs = [];
     if (currentNewsData.insufficient) msgs.push("找到的新聞少於 10 則，僅顯示現有結果");
     if (currentNewsData.stale) msgs.push("目前顯示的是舊資料");
+    if (currentNewsData.filtered && currentNewsData.removed > 0) msgs.push(`已排除 ${currentNewsData.removed} 則標題沒有提到公司名稱或代號的新聞（多為大盤消息）`);
     msgContainer.textContent = msgs.length > 0 ? msgs.join(' · ') : '';
 
     let items = currentNewsData.items || [];

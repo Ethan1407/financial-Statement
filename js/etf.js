@@ -50,7 +50,7 @@ async function syncEtf(id, addToPortfolio) {
     const isUpdating = !!loadStockDatabase()[id];
     const { result, error } = await requestEtf(id, isUpdating);
     if (error) {
-        alert(error);
+        showToast(`${id}：${error}`, 'error', 7000);
         return false;
     }
     const added = addToPortfolio && !portfolio.includes(id);
@@ -58,7 +58,7 @@ async function syncEtf(id, addToPortfolio) {
         portfolio.push(id);
         savePortfolio();
     }
-    alert(isUpdating ? `✅ ${id} 成分股更新完成！${added ? '\n已加入自選股。' : ''}` : `✅ 成功新增 ETF: ${id} ${result.name}`);
+    showToast(isUpdating ? `✅ ${id} 成分股更新完成！${added ? '\n已加入自選股。' : ''}` : `✅ 成功新增 ETF: ${id} ${result.name}`, 'success');
     return true;
 }
 
@@ -310,7 +310,7 @@ async function toggleQueryAllHoldings() {
     }
     const pending = currentEtfHoldings.filter(h => !h.analysis).sort((a, b) => b.weight - a.weight).map(h => h.stockId);
     if (pending.length === 0) return;
-    if (!confirm(`將依權重依序查詢 ${pending.length} 檔成分股的財報（不會加入自選股），每檔約需數秒，可隨時按「停止查詢」。確定開始？`)) return;
+    if (!await showConfirm(`將依權重依序查詢 ${pending.length} 檔成分股的財報（不會加入自選股），每檔約需數秒，可隨時按「停止查詢」。確定開始？`, { okText: '開始查詢' })) return;
 
     etfBatchRunning = true;
     updateQueryAllButton();
@@ -486,6 +486,8 @@ function renderEtfRiskSummary(risk) {
     document.getElementById('etf-view-concentration-sub').textContent = risk.count
         ? `最大持股 ${risk.top1.toFixed(2)}%・前五大 ${risk.top5.toFixed(2)}%・HHI ${risk.hhi}`
         : '';
+    const concSub = document.getElementById('etf-view-concentration-sub');
+    if (risk.count && concSub) concSub.insertAdjacentHTML('beforeend', termInfoButton('HHI'));
 
     document.getElementById('etf-rule-exposure').innerHTML = risk.rules.length === 0
         ? emptyHint(risk.queriedCount ? '已查詢的成分股皆未觸發警訊。' : '尚無已查詢的成分股。')
@@ -626,7 +628,7 @@ function createRiskCell(holding) {
             btn.disabled = true;
             btn.textContent = '查詢中…';
             const { error } = await requestStock(holding.stockId);
-            if (error) alert(`${holding.stockId}：${error}`);
+            if (error) showToast(`${holding.stockId}：${error}`, 'error', 7000);
             refreshEtfHoldings();
         };
         cell.appendChild(btn);
@@ -727,5 +729,5 @@ function addPreviewToPortfolio(stockId) {
     }
     updateDetailSelect();
     document.getElementById('preview-banner').style.display = 'none';
-    alert('✅ 已成功加入自選股');
+    showToast('✅ 已成功加入自選股', 'success');
 }

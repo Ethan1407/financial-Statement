@@ -251,6 +251,29 @@ def build_queries(company_name, stock_id):
 
 
 
+# ================= 相關性過濾 =================
+# 個股 RSS 常混入「台股收漲 102 點」這類大盤新聞。標題有提到公司名稱、簡稱或代號才算相關。
+MIN_RELEVANT = 5   # 相關新聞少於這個數量時不過濾（小型公司新聞少，過濾後可能幾乎沒有）
+# 名稱前兩字太常見、不能當簡稱的（例如「台灣大」的「台灣」）
+GENERIC_PREFIXES = {"台灣", "中華", "中國", "全球", "國際", "亞洲", "世界", "大中", "東南", "新光", "光電", "電子", "科技"}
+
+
+def relevance_terms(company_name, stock_id):
+    terms = {stock_id}
+    if company_name and not company_name.startswith("代號 "):
+        name = re.sub(r"[-－]?KY$|\*$", "", company_name).strip()
+        if name:
+            terms.add(name)
+            # 簡稱：「台積電」→「台積」、「森崴能源」→「森崴」
+            if len(name) >= 3 and name[:2] not in GENERIC_PREFIXES:
+                terms.add(name[:2])
+    return terms
+
+
+def is_relevant(title, terms):
+    return any(t in title for t in terms)
+
+
 # ================= 核心邏輯 =================
 def process_news(stock_id, supabase, force_refresh):
     with news_locks.get(stock_id):
@@ -306,14 +329,21 @@ def process_news(stock_id, supabase, force_refresh):
                     dedup[key] = item
         merge(all_items)
 
-        insufficient = False
-        if len(dedup) < 10:
+        terms = relevance_terms(company_name, stock_id)
+        relevant = lambda: [it for it in dedup.values() if is_relevant(it["title"], terms)]
+        if len(relevant()) < 10:
             loose = fetch_news(loose_query, 90)
             if loose:
                 merge(loose)
-            insufficient = len(dedup) < 10
 
-        final_list = sorted(dedup.values(), key=lambda x: x["_timestamp"], reverse=True)[:30]
+        pool = relevant()
+        filtered = len(pool) >= MIN_RELEVANT
+        if not filtered:
+            pool = list(dedup.values())
+        removed = len(dedup) - len(pool)
+        insufficient = len(pool) < 10
+
+        final_list = sorted(pool, key=lambda x: x["_timestamp"], reverse=True)[:30]
         for item in final_list:
             item.pop("_timestamp", None)
 
@@ -324,6 +354,7 @@ def process_news(stock_id, supabase, force_refresh):
         result = {
             "stockId": stock_id, "name": company_name, "fetchedAt": get_iso_now(),
             "counts": counts, "insufficient": insufficient, "stale": False, "items": final_list,
+            "filtered": filtered, "removed": removed,
         }
 
         if final_list and supabase:

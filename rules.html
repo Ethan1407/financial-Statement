@@ -2,7 +2,7 @@
 <html lang="zh-TW" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>規則與說明 - 財報健檢</title>
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -14,11 +14,11 @@
     <div class="nav-container">
       <div class="logo">📈 財報健檢儀表板</div>
       <nav class="nav-links">
-        <a href="index.html">已查詢股票</a>
-        <a href="alerts.html">警訊總覽</a>
-        <a href="details.html">個股詳情</a>
-        <a href="portfolio.html">投資組合健檢</a>
-        <a href="rules.html" class="active">規則與說明</a>
+        <a href="index.html"><span class="nav-icon" aria-hidden="true">📋</span><span class="nav-full">已查詢股票</span><span class="nav-short">已查詢</span></a>
+        <a href="alerts.html"><span class="nav-icon" aria-hidden="true">🚨</span><span class="nav-full">警訊總覽</span><span class="nav-short">警訊</span></a>
+        <a href="details.html"><span class="nav-icon" aria-hidden="true">🔎</span><span class="nav-full">個股詳情</span><span class="nav-short">個股</span></a>
+        <a href="portfolio.html"><span class="nav-icon" aria-hidden="true">🧺</span><span class="nav-full">投資組合健檢</span><span class="nav-short">組合健檢</span></a>
+        <a href="rules.html" class="active"><span class="nav-icon" aria-hidden="true">📖</span><span class="nav-full">規則與說明</span><span class="nav-short">規則</span></a>
       </nav>
       <button class="theme-toggle" onclick="toggleTheme()">🌓</button>
     </div>
@@ -32,8 +32,8 @@
       </p>
       <p style="margin-top: 8px; color: var(--text-light); line-height: 1.6; font-size: 0.9rem;">
         警訊規則參考
-        <a href="https://www.fanruan.com/zh-tw/blog/financial-report-analysis-beginners" target="_blank" rel="noopener noreferrer">帆軟〈財報分析入門〉</a>與
-        <a href="https://pttstock.tw/financial-statements/" target="_blank" rel="noopener noreferrer">PTT Stock〈財報三表完全解析〉</a>。
+        <a href="https://www.fanruan.com/zh-tw/blog/financial-report-analysis-beginners" target="_blank" rel="noopener noreferrer">帆軟軟體〈財務報表分析完整教學：一篇搞懂三大報表基礎與核心指標〉</a>與
+        <a href="https://pttstock.tw/financial-statements/" target="_blank" rel="noopener noreferrer">PTT股票公社〈【財報三表完全解析】損益表、資產負債表、現金流量表怎麼看？新手選股第一步（2026最新）〉</a>。
         兩篇都強調財務比率沒有跨產業通用的安全值，應比較連續多季趨勢與去年同期，因此多數規則以「連續季數」與「去年同季」判斷，
         並依產業類型調整門檻。除「營業現金流低於稅後淨利」的 1 倍門檻出自文章外，其餘數字門檻為本系統的設定值。
       </p>
@@ -69,6 +69,7 @@
   <footer class="site-footer">本網站資料來自公開資訊（FinMind、證交所、櫃買中心、MoneyDJ），依財報數據自動計算，可能有延遲或誤差；所有內容僅供參考，不構成投資建議。</footer>
 
   <script src="js/rules.js"></script>
+  <script src="js/ui.js"></script>
   <script src="js/app.js"></script>
   <script>
     const TAB_LABELS = { income: '損益表', balance: '資產負債表', cashflow: '現金流量表' };

@@ -66,7 +66,7 @@ function currentInputRows() {
 
 function addXrayRow() {
     const rows = currentInputRows();
-    if (rows.length >= XRAY_MAX_POSITIONS) return alert(`最多 ${XRAY_MAX_POSITIONS} 檔持倉`);
+    if (rows.length >= XRAY_MAX_POSITIONS) return showToast(`最多 ${XRAY_MAX_POSITIONS} 檔持倉`, 'warn');
     rows.push({ id: '', shares: '' });
     renderXrayInputs(rows);
     const inputs = document.querySelectorAll('#xray-rows .xray-id');
@@ -118,7 +118,7 @@ function storeXrayPresets(list) {
         localStorage.setItem(XRAY_PRESETS_KEY, JSON.stringify(list));
         return true;
     } catch (e) {
-        alert('瀏覽器儲存空間已滿，無法儲存組合');
+        showToast('瀏覽器儲存空間已滿，無法儲存組合', 'error');
         return false;
     }
 }
@@ -134,20 +134,20 @@ function renderXrayPresets() {
         : '<span class="section-hint" style="font-size:0.85rem;">尚未儲存任何組合</span>';
 }
 
-function saveXrayPreset() {
+async function saveXrayPreset() {
     const { positions, errors } = readXrayInputs();
     if (errors.length) return setXrayStatus(errors.map(escapeHtml).join('<br>'), true);
 
-    const name = (prompt('為這個組合取個名字（例如：主帳戶、存股組合）') || '').trim().slice(0, 20);
+    const name = ((await showPrompt('為這個組合取個名字（例如：主帳戶、存股組合）', { maxLength: 20, okText: '儲存' })) || '').trim().slice(0, 20);
     if (!name) return;
 
     const list = loadXrayPresets();
     const existing = list.findIndex(p => p.name === name);
     if (existing >= 0) {
-        if (!confirm(`已有名為「${name}」的組合，要覆蓋嗎？`)) return;
+        if (!await showConfirm(`已有名為「${name}」的組合，要覆蓋嗎？`, { okText: '覆蓋' })) return;
         list[existing] = { name, positions, savedAt: new Date().toISOString() };
     } else {
-        if (list.length >= XRAY_MAX_PRESETS) return alert(`最多儲存 ${XRAY_MAX_PRESETS} 個組合，請先刪除不用的組合`);
+        if (list.length >= XRAY_MAX_PRESETS) return showToast(`最多儲存 ${XRAY_MAX_PRESETS} 個組合，請先刪除不用的組合`, 'warn');
         list.push({ name, positions, savedAt: new Date().toISOString() });
     }
     if (storeXrayPresets(list)) {
@@ -166,9 +166,9 @@ function applyXrayPreset(index) {
     if (firstShares) firstShares.focus();
 }
 
-function deleteXrayPreset(index) {
+async function deleteXrayPreset(index) {
     const list = loadXrayPresets();
-    if (!list[index] || !confirm(`確定刪除組合「${list[index].name}」？`)) return;
+    if (!list[index] || !await showConfirm(`確定刪除組合「${list[index].name}」？`, { okText: '刪除', danger: true })) return;
     list.splice(index, 1);
     storeXrayPresets(list);
     renderXrayPresets();
@@ -425,8 +425,8 @@ function renderXrayResult() {
         statTile('底層實際持有', `${r.stocks.length} 檔個股`, r.etfIds.length ? `由 ${r.etfIds.length} 檔 ETF 拆解而來` : ''),
         statTile('最大單一曝險', top ? `${top.weight.toFixed(1)}%` : '--', top ? escapeHtml(`${top.stockId} ${top.name}`) : ''),
         statTile('前五大個股合計', `${r.top5.toFixed(1)}%`),
-        statTile('有效持股數', r.effectiveCount ? `${r.effectiveCount.toFixed(1)} 檔` : '--',
-            `集中度：${r.hhiLabel}（HHI ${r.hhi}）`),
+        statTile(termHtml('有效持股數'), r.effectiveCount ? `${r.effectiveCount.toFixed(1)} 檔` : '--',
+            `集中度：${r.hhiLabel}（${termHtml('HHI', `HHI ${r.hhi}`)}）`),
         statTile('重複持有的個股', `${r.overlapping.length} 檔`, `合計佔 ${r.overlapWeight.toFixed(1)}%`)
     ].join('');
 
