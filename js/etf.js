@@ -19,6 +19,8 @@ function storeEtfResult(id, result) {
         asOf: result.asOf,
         count: result.count,
         top3: holdings.slice(0, 3).map(h => ({ name: h.name, weight: h.weight })),
+        // 成分股代號 → 權重，推薦原因用來判斷「你查詢的 ETF 也持有」
+        holdings: Object.fromEntries(holdings.filter(h => h.stockId).map(h => [h.stockId, h.weight])),
         fetchedAt: result.fetchedAt,
         risk: etfRiskSnapshot(computeEtfRisk(holdings))
     };

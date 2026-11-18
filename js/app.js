@@ -1504,7 +1504,9 @@ function renderCharts(stockId, alerts = []) {
           let peerScores = [SCORE_CONFIG.baseline, SCORE_CONFIG.baseline, SCORE_CONFIG.baseline, SCORE_CONFIG.baseline, SCORE_CONFIG.baseline];
           let peerLabel = '參考基準線';
           
+          // 同類型自選股平均：不含目前這家公司（含自己會把平均拉向自己，比較失去意義），至少要有 2 家才取平均
           let peers = portfolio.filter(id => {
+              if (id === stockId) return false;
               let pAnal = analyzeStock(id);
               return pAnal && pAnal.effectiveType === analysis.effectiveType;
           });
@@ -1519,19 +1521,20 @@ function renderCharts(stockId, alerts = []) {
                   }
               });
               for(let i=0; i<5; i++) { peerScores[i] = counts[i] > 0 ? Math.round(total[i]/counts[i]) : null; }
-              peerLabel = '同類型自選股平均';
+              peerLabel = `同類型自選股平均（${peers.length} 家）`;
           }
 
           let slHtml = `<h4 style="margin-bottom:12px; border-bottom:1px solid var(--border); padding-bottom:8px;">五大構面健康度</h4>`;
           dims.forEach((d, i) => {
               let sVal = myScores[i] == null ? '資料不足' : `${myScores[i]} 分`;
               let color = myScores[i] == null ? 'var(--text-light)' : (myScores[i] < 40 ? 'var(--red)' : (myScores[i] > 70 ? 'var(--green)' : 'var(--text)'));
+              let peerVal = peerScores[i] == null ? '' : `<span style="font-size:0.78rem; color:var(--text-light); font-weight:normal;">（${peers.length >= 2 ? '平均' : '基準'} ${peerScores[i]}）</span>`;
               slHtml += `<div style="margin-bottom:10px;">
-                  <div style="display:flex; justify-content:space-between;"><span>${d}</span> <strong style="color:${color}">${sVal}</strong></div>
+                  <div style="display:flex; justify-content:space-between;"><span>${d}</span> <span><strong style="color:${color}">${sVal}</strong>${peerVal}</span></div>
                   ${breakdown.notes[i] ? `<div style="font-size:0.78rem; color:var(--text-light); margin-top:2px;">${escapeHtml(breakdown.notes[i])}</div>` : ''}
               </div>`;
           });
-          slHtml += `<p style="font-size:0.8rem; color:var(--text-light); margin-top:16px; line-height:1.5;">*獲利、成長、現金流依近 4 季合計計算，償債力用最新一季。100 分代表在台股中屬於很突出的水準。分數僅為相對參考，並非投資評等。</p>`;
+          slHtml += `<p style="font-size:0.8rem; color:var(--text-light); margin-top:16px; line-height:1.5;">*獲利、成長、現金流依近 4 季合計計算，償債力用最新一季。100 分代表在台股中屬於很突出的水準。灰色虛線是同類型自選股（不含本公司）的平均，家數越多、公司差異越大，平均會越接近中間值。分數僅為相對參考，並非投資評等。</p>`;
           scoreList.innerHTML = slHtml;
 
           if(currentCharts['chart-radar']) currentCharts['chart-radar'].destroy();

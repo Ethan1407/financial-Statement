@@ -259,6 +259,7 @@ th { background-color: rgba(0,0,0,0.02); color: var(--text-light); font-weight: 
 .rec-rows div { display: flex; justify-content: space-between; gap: 12px; }
 .rec-rows span { flex-shrink: 0; }
 .rec-rows strong { color: var(--text); text-align: right; font-weight: 600; }
+.rec-reasons { list-style: none; margin: 0; padding: 0; text-align: right; color: var(--text); font-weight: 600; display: flex; flex-direction: column; gap: 4px; }
 .rec-speed { font-size: 0.85rem; color: var(--text-light); line-height: 1.5; margin-bottom: 12px; }
 .rec-card-foot { margin-top: auto; }
 .rec-card-foot a { display: block; text-align: center; }
