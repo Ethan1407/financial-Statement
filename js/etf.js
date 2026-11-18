@@ -8,6 +8,23 @@ let etfExpanded = false;
 let etfSortBy = 'weight';
 let etfBatchRunning = false;
 
+// 把 /api/etf 的回應整理成摘要存入瀏覽器（預設快照也走這裡）；儲存空間已滿時回傳 false
+function storeEtfResult(id, result) {
+    const holdings = enrichEtfHoldings(result.holdings || []);
+    const stockDatabase = loadStockDatabase();
+    stockDatabase[id] = {
+        isEtf: true,
+        name: result.name,
+        etfId: result.etfId,
+        asOf: result.asOf,
+        count: result.count,
+        top3: holdings.slice(0, 3).map(h => ({ name: h.name, weight: h.weight })),
+        fetchedAt: result.fetchedAt,
+        risk: etfRiskSnapshot(computeEtfRisk(holdings))
+    };
+    return saveStockDatabase(stockDatabase);
+}
+
 // --- 抓取 ETF 成分股並存入瀏覽器（含成分股風險摘要）。回傳 { result } 或 { error } ---
 async function requestEtf(id, refresh = false) {
     const controller = new AbortController();
@@ -16,20 +33,7 @@ async function requestEtf(id, refresh = false) {
         const response = await fetch(`${API_BASE}/api/etf/${id}${refresh ? '?refresh=1' : ''}`, { signal: controller.signal });
         const result = await response.json();
         if (!response.ok) return { error: result.error || 'ETF 取得失敗' };
-
-        const holdings = enrichEtfHoldings(result.holdings || []);
-        const stockDatabase = loadStockDatabase();
-        stockDatabase[id] = {
-            isEtf: true,
-            name: result.name,
-            etfId: result.etfId,
-            asOf: result.asOf,
-            count: result.count,
-            top3: holdings.slice(0, 3).map(h => ({ name: h.name, weight: h.weight })),
-            fetchedAt: result.fetchedAt,
-            risk: etfRiskSnapshot(computeEtfRisk(holdings))
-        };
-        if (!saveStockDatabase(stockDatabase)) return { error: '瀏覽器儲存空間已滿，請先刪除部分「其他已查詢股票」。' };
+        if (!storeEtfResult(id, result)) return { error: '瀏覽器儲存空間已滿，請先刪除部分「其他已查詢股票」。' };
         return { result };
     } catch (err) {
         return { error: err.name === 'AbortError' ? '請求逾時：雲端伺服器可能正在喚醒中，請稍後重試！' : networkErrorReason() };

@@ -179,9 +179,34 @@ document.addEventListener('visibilitychange', () => {
 
 function isEtfId(id) { return /^00\d{2,4}[A-Za-z]?$/.test(id || ''); }
 
-// 抓取預設自選股的資料；全部成功才存檔，失敗的話下次造訪會再試一次
+// 預設自選股的靜態快照（data/seed/，由 GitHub Actions 每天更新），跟網頁一起放在 Vercel，
+// 不用等後端主機喚醒就能先顯示；瀏覽器裡已有資料的股票不覆蓋。
+async function loadSeedSnapshots() {
+  const db = loadStockDatabase();
+  const missing = DEFAULT_PORTFOLIO.filter(id => !db[id]);
+  // 沒載入 etf.js 的頁面（警訊總覽、規則說明）無法整理 ETF 快照，略過
+  const usable = missing.filter(id => !isEtfId(id) || typeof storeEtfResult === 'function');
+  const loaded = await Promise.all(usable.map(async id => {
+    try {
+      const response = await fetch(`data/seed/${id}.json`, { cache: 'no-cache' });
+      if (!response.ok) return false;
+      const result = await response.json();
+      if (isEtfId(id)) return storeEtfResult(id, result);
+      const next = loadStockDatabase();
+      next[id] = result;
+      return saveStockDatabase(next);
+    } catch { return false; }
+  }));
+  return loaded.some(Boolean);
+}
+
+// 抓取預設自選股的資料；先顯示靜態快照，再向後端取得最新資料。全部成功才存檔，失敗的話下次造訪會再試一次
 async function seedDefaultPortfolio() {
-  const results = await Promise.all(DEFAULT_PORTFOLIO.map(id => isEtfId(id) ? requestEtf(id) : requestStock(id)));
+  if (await loadSeedSnapshots()) rerenderCurrentPage();
+  const results = await Promise.all(DEFAULT_PORTFOLIO.map(id => {
+    if (isEtfId(id)) return typeof requestEtf === 'function' ? requestEtf(id) : { error: 'etf.js 未載入' };
+    return requestStock(id);
+  }));
   if (results.every(r => !r.error)) savePortfolio();
   seedingDefaults = false;
   rerenderCurrentPage();
@@ -209,10 +234,11 @@ function toggleTheme() {
 }
 
 function setActiveNav() {
-  const path = window.location.pathname;
+  // 取出目前頁面名稱：網址是「/」（剛進網站）時視為 index；Vercel 可能省略 .html，比對前統一去掉
+  const pageName = p => (p.split('/').pop() || 'index').replace(/\.html$/, '');
+  const current = pageName(window.location.pathname);
   document.querySelectorAll('.nav-links a').forEach(link => {
-    if (path.includes(link.getAttribute('href'))) link.classList.add('active');
-    else link.classList.remove('active');
+    link.classList.toggle('active', pageName(link.getAttribute('href')) === current);
   });
 }
 

@@ -1,0 +1,55 @@
+# 每月更新一次預設自選股（2330、0050）的靜態快照 data/seed/*.json。
+# 第一次造訪的人不用等後端主機喚醒（約 1 分鐘），網頁會先顯示這份快照，再向後端取得最新資料。
+# 選每月 20 日：季報申報期限（5/15、8/14、11/14）之後，新一季財報已經進來。
+# 有變動才 commit，推上 main 後 Vercel 會自動重新部署。
+name: Refresh seed snapshots
+
+on:
+  schedule:
+    - cron: '43 22 20 * *'  # 每月 20 日 UTC 22:43（台灣時間 21 日 06:43）
+  workflow_dispatch:         # 也可以在 GitHub 的 Actions 頁面手動執行
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE: ${{ vars.API_BASE || 'https://financial-statement-xou2.onrender.com' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下載快照
+        run: |
+          fetch() {
+            # Render 免費方案閒置後要 30～60 秒才會醒，失敗就多試幾次
+            for i in 1 2 3 4 5; do
+              if curl -sS --fail --max-time 120 "$API_BASE$1" -o "$2.tmp"; then
+                # 確認是合法 JSON 且含有必要欄位，才覆蓋舊檔
+                if python3 -c "import json,sys; d=json.load(open('$2.tmp')); sys.exit(0 if d.get('$3') else 1)"; then
+                  mv "$2.tmp" "$2"
+                  return 0
+                fi
+              fi
+              echo "第 $i 次下載 $1 失敗，30 秒後重試"
+              sleep 30
+            done
+            rm -f "$2.tmp"
+            echo "::warning::$1 下載失敗，保留舊快照"
+          }
+          fetch /api/stock/2330 data/seed/2330.json quarters
+          fetch /api/etf/0050 data/seed/0050.json holdings
+
+      - name: 有變動才 commit
+        run: |
+          if git diff --quiet -- data/seed; then
+            echo "快照沒有變動"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/seed
+          git commit -m "chore: 更新預設自選股快照"
+          git push

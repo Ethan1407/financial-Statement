@@ -68,7 +68,8 @@ main { max-width: 1200px; margin: 24px auto; padding: 0 20px; min-height: 80vh; 
   font-weight: bold; 
   color: #fff; 
   white-space: nowrap; 
-  display: inline-block; 
+  display: inline-block;
+  border: 1px solid transparent; /* 與有外框的綠／灰標籤同高，紅燈、黃燈才不會小一圈 */
 }
 .badge.green { background-color: var(--green); }
 .badge.yellow { background-color: var(--yellow); }
@@ -99,6 +100,16 @@ th { background-color: rgba(0,0,0,0.02); color: var(--text-light); font-weight: 
 .alert-item { padding: 12px; border: 1px solid var(--border); border-left: 4px solid transparent; margin-bottom: 8px; background-color: var(--card-bg); cursor: pointer; transition: 0.2s; border-radius: 0 4px 4px 0; }
 .alert-item.red { border-left-color: var(--red); }
 .alert-item.yellow { border-left-color: var(--yellow); }
+
+/* 健康度雷達圖：桌機左圖右分數，窄螢幕改成上圖下分數 */
+.radar-layout { display: flex; align-items: center; gap: 24px; }
+.radar-chart { flex: 2; max-width: 500px; position: relative; min-height: 300px; }
+.radar-scores { flex: 1; min-width: 0; }
+@media (max-width: 768px) {
+  .radar-layout { flex-direction: column; align-items: stretch; }
+  .radar-chart { flex: none; width: 100%; max-width: none; height: 320px; }
+  .radar-scores { flex: none; }
+}
 
 /* 新聞區塊標籤與篩選按鈕樣式 */
 .badge.green { background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
