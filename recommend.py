@@ -346,6 +346,7 @@ class Recommender:
 def register_recommend(app, supabase=None, get_industry_map=None, get_price_map=None, prefetch_fn=None):
     rec = Recommender(supabase, get_industry_map, get_price_map, prefetch_fn)
     bp = Blueprint("recommend_bp", __name__)
+    event_dedupe = TTLCache(ttl=1800, maxsize=20000)
 
     def parse_limit(default, maximum):
         try:
@@ -377,6 +378,12 @@ def register_recommend(app, supabase=None, get_industry_map=None, get_price_map=
         event, placement = data.get("event"), data.get("placement")
         if event not in EVENT_TYPES or placement not in PLACEMENTS:
             return jsonify({"error": "參數錯誤"}), 400
+        # 同一位瀏覽者（IP）同一種事件、同一個位置，30 分鐘內只記一次，避免被程式灌高點擊率與回饋數
+        # IP 只放在記憶體當去重用的 key，不寫入資料庫
+        dedupe_key = (request.remote_addr or "unknown", event, placement)
+        if event_dedupe.get(dedupe_key):
+            return ("", 204)
+        event_dedupe.set(dedupe_key, True)
         rec.record(event, placement)
         return ("", 204)
 

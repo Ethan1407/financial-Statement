@@ -50,7 +50,7 @@
 - **依產業調整門檻**：依證交所產業別自動判斷公司類型（電子、景氣循環、成長、零售、營建、金融……），減少因產業特性造成的誤判；也可在個股詳情手動更改。
 - **ETF 透視**：投資組合可混合輸入個股與 ETF，以矩陣乘法 `vᵀ · W` 算出每家公司的真實曝險，找出不同 ETF 重壓同一批股票的情況。
 - **持股只存在本機**：自選股、投資組合與股數都存在瀏覽器 `localStorage`，不會上傳到伺服器。
-- **股價即時與省流量兼顧**：盤中（週一至週五 9:00～13:35）才向證交所即時報價 API 抓成交價，同一檔 10 秒內所有使用者共用一次結果；其他時間 30 分鐘才更新一次，抓不到時改用每日收盤價。K 線歷史存在資料庫，之後每天只補新的幾天。
+- **股價資料來源**：預設只用證交所、櫃買中心 OpenAPI 的每日收盤價；盤中即時報價需取得授權後以環境變數開啟（開啟時同一檔 10 秒內所有使用者共用一次結果）。K 線歷史存在資料庫，之後每天只補新的幾天。
 - **還原股價自己算**：FinMind 的還原股價需要付費，改用免費的除權息結果與股票分割資料換算調整係數；股票分割一律調整，配息可在 K 線切換是否還原。
 - **淺色／深色主題**切換。
 
@@ -247,7 +247,8 @@ python -m http.server 8080
 **後端（Render）**
 
 - Build Command：`pip install -r requirements.txt`
-- Start Command：`gunicorn server:app`
+- Start Command：`gunicorn server:app`（執行緒數、逾時等設定在 [gunicorn.conf.py](gunicorn.conf.py)，gunicorn 會自動讀取：1 個 worker、8 個執行緒、逾時 120 秒）
+- 盤中即時報價預設關閉，股價只用證交所、櫃買中心 OpenAPI 的每日收盤價（政府資料開放授權）。即時行情再提供給他人可能需要證交所授權，取得授權後可設定環境變數 `ENABLE_REALTIME_QUOTES=true` 開啟。
 - 在 Render 設定上述環境變數，並將 `ALLOWED_ORIGINS` 設為前端網址。
 
 **前端（Vercel）**
@@ -263,7 +264,7 @@ python -m http.server 8080
 
 | 方法 | 路徑 | 說明 |
 | --- | --- | --- |
-| `GET` | `/api/health` | 服務狀態、環境變數是否設定、資料庫連線 |
+| `GET` | `/api/health` | 服務狀態與資料庫是否連上（資料庫檢查 60 秒內共用結果）；帶 `X-Admin-Key` 才回傳 Python 版本、環境變數是否設定 |
 | `GET` | `/api/stock/<stock_id>` | 個股季度財報與指標。參數：`limit`（4–24 季，預設 8）、`refresh=1`（檢查新資料，同一檔每 10 分鐘一次） |
 | `GET` | `/api/stocks?ids=2330,2317` | 批次查詢，最多 20 檔 |
 | `GET` | `/api/monthly/<stock_id>` | 月營收 |
@@ -273,8 +274,8 @@ python -m http.server 8080
 | `GET` | `/api/prices/live?ids=2330,0050` | 即時報價（盤中）或最近收盤價，最多 60 檔；回傳 `marketOpen`、建議的更新間隔 `pollSeconds` |
 | `GET` | `/api/prices/history/<stock_id>` | 2019 年起的日 K（開高低收、成交張數）與除權息／分割調整係數 |
 | `GET` | `/api/prices/valuation/<stock_id>` | 證交所每日本益比、股價淨值比、殖利率與近 5 年位置，12-1 個月動能、離 52 週高點、近 1 年最大回撤（與 0050 比較） |
-| `GET` | `/api/prices/risk?ids=2330,2317` | 股價健康度指標：證交所／櫃買中心注意、處置、變更交易方法名單，近 3 月波動度與超額報酬（對 0050），違約距離（naive Merton DD），最多 60 檔 |
-| `GET` | `/api/prices/summary?ids=2330,0050` | 近一月收盤價（迷你走勢圖）與 52 週最高／最低，最多 60 檔 |
+| `GET` | `/api/prices/risk?ids=2330,2317` | 股價健康度指標：證交所／櫃買中心注意、處置、變更交易方法名單，近 3 月波動度與超額報酬（對 0050），違約距離（naive Merton DD，股數用已發行股數），最多 10 檔 |
+| `GET` | `/api/prices/summary?ids=2330,0050` | 近一月收盤價（迷你走勢圖）與 52 週最高／最低，最多 10 檔 |
 | `GET` | `/api/conferences/<stock_id>` | 法人說明會（過去 12 個月、當月與下個月），附同步狀態與收錄範圍 |
 | `GET` | `/api/recommend/peers/<stock_id>` | 同產業公司（已有財報快取的排前面，不依財務表現排序） |
 | `GET` | `/api/recommend/industries?names=半導體業,金融保險` | 依產業名稱列出公司，最多 5 個產業 |

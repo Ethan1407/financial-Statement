@@ -8,7 +8,8 @@
 
 const PX_PREFS_KEY = 'prices_prefs';
 const PX_ID_RE = /^[0-9]{4,6}[A-Za-z]?$/;
-const PX_MAX_IDS = 60;                     // 後端一次最多 60 檔
+const PX_MAX_IDS = 60;                     // 即時報價：後端一次最多 60 檔
+const PX_SUMMARY_BATCH = 10;               // 近一月走勢、52 週區間：後端一次最多 10 檔
 const PX_CLOSED_RECHECK_MAX = 30 * 60;     // 非盤中最多 30 分鐘重新整理一次（秒）
 const PX_ERROR_RETRY = 30;                 // 失敗後 30 秒重試（主機可能正在喚醒）
 const PX_MA = [5, 20, 60];
@@ -281,7 +282,13 @@ async function pxFetchSummary() {
   const ids = pxIds();
   if (!ids.length) return;
   try {
-    const parts = await Promise.all(pxChunks(ids, PX_MAX_IDS).map(chunk => pxGetJson(`/api/prices/summary?ids=${chunk.join(',')}`, 90000)));
+    // 每次 10 檔、依序送出：第一次每檔都要抓日 K，一次要太多會被主機逾時中斷
+    const parts = [];
+    for (const chunk of pxChunks(ids, PX_SUMMARY_BATCH)) {
+      parts.push(await pxGetJson(`/api/prices/summary?ids=${chunk.join(',')}`, 90000));
+      parts.forEach(p => Object.assign(PX.summary, p.summary));
+      pxRenderTable();
+    }
     parts.forEach(p => Object.assign(PX.summary, p.summary));
   } catch (err) {
     ids.forEach(id => { if (!PX.summary[id]) PX.summary[id] = { error: pxErr(err) }; });
@@ -312,7 +319,13 @@ function pxRenderStatus() {
     state = 'error'; text = `股價載入失敗：${PX.liveError}（${PX_ERROR_RETRY} 秒後自動重試）`;
   } else if (st) {
     const time = new Date(PX.lastFetchAt).toLocaleTimeString('zh-TW', { hour12: false });
-    if (st.marketOpen) {
+    if (st.realtime === false) {
+      // 未開啟即時報價：只用證交所／櫃買中心開放資料的每日收盤價
+      state = 'closed';
+      const dates = Object.values(PX.quotes).filter(Boolean).map(q => q.date).filter(Boolean).sort();
+      const latest = dates[dates.length - 1];
+      text = `顯示 ${latest ? pxShortDate(latest) + ' ' : '最近一個交易日的'}收盤價（證交所、櫃買中心開放資料，每個交易日收盤後更新）`;
+    } else if (st.marketOpen) {
       state = 'open';
       text = `盤中即時：每 ${st.pollSeconds || 15} 秒自動更新，最後更新 ${time}`;
     } else {

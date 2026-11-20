@@ -4,5 +4,5 @@
 __pycache__/
 *.pyc
 cache/
-ebug_*.json
+debug_*.json
 coverage_report.json

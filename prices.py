@@ -12,6 +12,7 @@
   一次回傳多檔的近一個月收盤價（迷你走勢圖）與 52 週最高／最低價。
 """
 import math
+import os
 import re
 import threading
 import time
@@ -24,10 +25,15 @@ from flask import Blueprint, request, jsonify
 from common import get_iso_now, safe_parse_iso, TTLCache, LockRegistry
 
 ID_RE = re.compile(r"^[0-9]{4,6}[A-Za-z]?$")
-MAX_IDS = 60
+MAX_IDS = 60            # 即時報價：一次請求即可取得，不耗 FinMind 額度
+MAX_HEAVY_IDS = 10      # 摘要、風險：每檔第一次可能要 3～4 次 FinMind 呼叫，限制單一請求的工作量（Render 預設 30 秒逾時）
 TW_TZ = timezone(timedelta(hours=8))
 
 # ---------- 即時報價 ----------
+# 盤中即時報價（證交所「基本市況報導」網站）：把即時行情再提供給別人可能需要證交所授權，預設關閉，
+# 只用證交所／櫃買中心 OpenAPI 的每日收盤價（政府資料開放授權，註明來源即可使用）。
+# 取得授權後，在環境變數設定 ENABLE_REALTIME_QUOTES=true 即可開啟。
+REALTIME_ENABLED = os.getenv("ENABLE_REALTIME_QUOTES", "false").strip().lower() in ("1", "true", "yes")
 MIS_URL = "https://mis.twse.com.tw/stock/api/getStockInfo.jsp"
 MIS_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -117,6 +123,7 @@ class PriceService:
         self.last_trade = {}      # code -> 最後一次有成交的價格（即時 API 偶爾某次沒有成交價）
         self.mis_failed_at = 0
         self.official_cache = TTLCache(ttl=OFFICIAL_TTL, maxsize=1)
+        self.shares_cache = TTLCache(ttl=12 * 3600, maxsize=500)
         self.official_lock = threading.Lock()
 
     # ================= 即時報價 =================
@@ -168,6 +175,17 @@ class PriceService:
             "date": date, "time": item.get("t") or "", "source": "live", "estimated": estimated,
         }
 
+    def get_close_only(self, ids):
+        """未開啟即時報價：只回傳每日收盤價（證交所、櫃買中心 OpenAPI，收盤後更新），30 分鐘更新一次"""
+        price_map = self.get_price_map() or {}
+        quotes = {c: (self._close_quote(price_map[c]) if c in price_map else None) for c in ids}
+        return {
+            "marketOpen": False, "realtime": False, "pollSeconds": None,
+            "nextRefreshSeconds": LIVE_TTL_CLOSED, "nextOpenInSeconds": None,
+            "serverTime": tw_now().isoformat(timespec="seconds"), "quotes": quotes,
+            "warning": None if price_map else "收盤價暫時無法取得，請稍後再試",
+        }
+
     def _close_quote(self, q):
         """每日收盤價（證交所／櫃買中心 OpenAPI）轉成同樣的格式"""
         change = q.get("change")
@@ -180,6 +198,8 @@ class PriceService:
         }
 
     def get_live(self, ids):
+        if not REALTIME_ENABLED:
+            return self.get_close_only(ids)
         now = tw_now()
         window = is_market_window(now)
         ttl = LIVE_TTL_OPEN if window else LIVE_TTL_CLOSED
@@ -231,6 +251,7 @@ class PriceService:
         else:
             refresh = min(LIVE_TTL_CLOSED, next_open + 5)
         return {
+            "realtime": True,
             "marketOpen": market_open,
             "pollSeconds": LIVE_POLL_SECONDS if market_open else None,
             "nextRefreshSeconds": refresh,
@@ -366,6 +387,20 @@ class PriceService:
             print(f"[{sid}] 資產負債表讀取失敗: {type(e).__name__}")
             return None
 
+    def get_shares_issued(self, sid):
+        """已發行股數（證交所公布，FinMind TaiwanStockShareholding），一天抓一次"""
+        key = f"shares:{sid}"
+        cached = self.shares_cache.get(key)
+        if cached is not None:
+            return cached or None
+        start = (tw_now().date() - timedelta(days=14)).isoformat()
+        data, _ = self.fetch_finmind("TaiwanStockShareholding", sid, start)
+        rows = [r for r in data or [] if r.get("NumberOfSharesIssued")]
+        shares = float(max(rows, key=lambda r: r["date"])["NumberOfSharesIssued"]) if rows else 0
+        if data is not None:  # 抓取失敗（例如額度用完）不快取，下次再試
+            self.shares_cache.set(key, shares)
+        return shares or None
+
     def get_risk(self, sid, bench_rows, official):
         entry, err, _ = self.get_history(sid, with_events=True)
         if not entry:
@@ -384,7 +419,7 @@ class PriceService:
             result["exret3m"] = round(ex, 4) if ex is not None else None
         balance = self._balance_raw(sid)
         if balance:
-            dd, info = calc_naive_dd(raw, adj, balance)
+            dd, info = calc_naive_dd(raw, adj, balance, self.get_shares_issued(sid))
             result["dd"], result["ddInputs" if dd is not None else "ddNote"] = dd, info
         else:
             result["ddNote"] = "尚未取得資產負債表（先查詢這檔的財報）"
@@ -542,7 +577,7 @@ def _latest_value(raw_rows, type_name):
     return float(last["value"]), last.get("date")
 
 
-def calc_naive_dd(raw_close_rows, adj_rows, balance_raw):
+def calc_naive_dd(raw_close_rows, adj_rows, balance_raw, shares_issued=None):
     """回傳 (DD, 計算依據)；資料不足回傳 (None, 原因)"""
     cur_liab, bs_date = _latest_value(balance_raw, "CurrentLiabilities")
     noncur_liab, _ = _latest_value(balance_raw, "NoncurrentLiabilities")
@@ -554,7 +589,9 @@ def calc_naive_dd(raw_close_rows, adj_rows, balance_raw):
         noncur_liab = max((total or cur_liab) - cur_liab, 0)
     if len(adj_rows) < YEAR_DAYS + 1:
         return None, "股價資料未滿一年"
-    shares = share_capital / 10                      # 台股面額多為 10 元
+    # 股數用公開的已發行股數（FinMind TaiwanStockShareholding）；面額不一定是 10 元（例如 KY 公司），
+    # 用「股本 ÷ 10」會讓市值差好幾倍，只有查不到股數時才退回這個估算
+    shares = shares_issued if shares_issued and shares_issued > 0 else share_capital / 10
     E = raw_close_rows[-1][4] * shares               # 市值用實際收盤價
     F = cur_liab + 0.5 * noncur_liab
     if F <= 0 or E <= 0:
@@ -568,6 +605,7 @@ def calc_naive_dd(raw_close_rows, adj_rows, balance_raw):
     return round(dd, 2), {
         "marketCap": round(E / 1e8, 1), "defaultPoint": round(F / 1e8, 1), "sigmaE": round(sigma_e, 3),
         "mu": round(mu, 3), "sigmaV": round(sigma_v, 3), "balanceDate": bs_date, "unit": "億元",
+        "sharesSource": "issued" if shares_issued and shares_issued > 0 else "capital/10",
     }
 
 
@@ -655,10 +693,10 @@ def adjust_rows(rows, events):
     return out
 
 
-def parse_ids():
+def parse_ids(limit=MAX_IDS):
     ids = [s.strip().upper() for s in request.args.get("ids", "").split(",") if s.strip()]
     ids = list(dict.fromkeys(ids))
-    if not ids or len(ids) > MAX_IDS or not all(ID_RE.match(s) for s in ids):
+    if not ids or len(ids) > limit or not all(ID_RE.match(s) for s in ids):
         return None
     return ids
 
@@ -690,9 +728,9 @@ def register_prices(app, supabase, fetch_finmind, get_price_map):
 
     @bp.route("/api/prices/summary", methods=["GET"])
     def api_prices_summary():
-        ids = parse_ids()
+        ids = parse_ids(MAX_HEAVY_IDS)
         if not ids:
-            return jsonify({"error": f"代號格式錯誤（最多 {MAX_IDS} 檔，以逗號分隔）"}), 400
+            return jsonify({"error": f"代號格式錯誤（最多 {MAX_HEAVY_IDS} 檔，以逗號分隔）"}), 400
         with ThreadPoolExecutor(max_workers=SUMMARY_WORKERS) as ex:
             results = dict(zip(ids, ex.map(service.get_summary, ids)))
         return jsonify({"summary": results})
@@ -708,9 +746,9 @@ def register_prices(app, supabase, fetch_finmind, get_price_map):
     @bp.route("/api/prices/risk", methods=["GET"])
     def api_prices_risk():
         """股價健康度指標：官方注意／處置／變更交易、近 3 月波動度與超額報酬、違約距離"""
-        ids = parse_ids()
+        ids = parse_ids(MAX_HEAVY_IDS)
         if not ids:
-            return jsonify({"error": f"代號格式錯誤（最多 {MAX_IDS} 檔，以逗號分隔）"}), 400
+            return jsonify({"error": f"代號格式錯誤（最多 {MAX_HEAVY_IDS} 檔，以逗號分隔）"}), 400
         official = service.get_official_flags()
         bench, _, _ = service.get_history(BENCHMARK_ID, with_events=True)
         bench_rows = adjust_rows(bench["rows"], bench["events"] or []) if bench else None

@@ -197,13 +197,20 @@ def get_monthly_check_ttl():
 def get_stock_lock(stock_id):
     return stock_locks.get(stock_id)
 
+def log_db_write_error(stock_id, table, err):
+    """資料庫寫入失敗不中斷流程（資料仍會回傳給使用者），但要留下紀錄方便排查"""
+    print(f"⚠️ [{stock_id}] 資料庫寫入失敗（{table}）：{type(err).__name__}: {err}")
+
+# FinMind 的額度是整個 Token 共用：被限流（429 或回應 limit）時全部暫停 10 分鐘，而不是只暫停那一檔
+FINMIND_GLOBAL_BACKOFF_KEY = "__all__"
+
 def fetch_finmind_data(dataset, stock_id=None, start_date=START_DATE):
     """stock_id 為 None 時抓全市場資料"""
     if not FINMIND_TOKEN:
         print(f"[{stock_id}] {dataset} 請求失敗: Token 未設定")
         return None, "TOKEN_MISSING"
 
-    if finmind_backoff.get(stock_id):
+    if finmind_backoff.get(FINMIND_GLOBAL_BACKOFF_KEY):
         return None, "BACKOFF"
 
     url = "https://api.finmindtrade.com/api/v4/data"
@@ -215,7 +222,8 @@ def fetch_finmind_data(dataset, stock_id=None, start_date=START_DATE):
         if resp.status_code != 200:
             print(f"[{stock_id}] FinMind HTTP 錯誤: {resp.status_code} - {resp.text}")
             if resp.status_code == 429:
-                finmind_backoff.set(stock_id, True)
+                finmind_backoff.set(FINMIND_GLOBAL_BACKOFF_KEY, True)
+                print("⚠️ FinMind 限流，所有 FinMind 請求暫停 10 分鐘")
                 return None, "RATE_LIMITED"
             return None, f"HTTP_{resp.status_code}"
         
@@ -224,7 +232,9 @@ def fetch_finmind_data(dataset, stock_id=None, start_date=START_DATE):
             msg = resp_json.get("msg", "unknown")
             print(f"[{stock_id}] FinMind API 錯誤: {msg}")
             # 只有明確被限制時才 backoff
-            if "limit" in msg.lower(): finmind_backoff.set(stock_id, True)
+            if "limit" in msg.lower():
+                finmind_backoff.set(FINMIND_GLOBAL_BACKOFF_KEY, True)
+                print("⚠️ FinMind 額度用完，所有 FinMind 請求暫停 10 分鐘")
             return None, f"API_ERROR: {msg}"
             
         data = resp_json.get("data", [])
@@ -626,7 +636,7 @@ def process_financials(stock_id, refresh_mode=False, allow_full=True):
                         "latest_income_date": latest_inc_date, "latest_quarter": new_res.get("latestCompleteQuarter"),
                         "complete": not new_res.get("latestQuarterPartial"), "checked_at": db_checked_at, "updated_at": now_str
                     }).execute()
-                except Exception: pass
+                except Exception as e: log_db_write_error(stock_id, "stock_results", e)
                 db_res = {"calc_version": CALC_VERSION, "result": new_res, "checked_at": db_checked_at, "complete": not new_res.get("latestQuarterPartial"), "latest_income_date": latest_inc_date, "updated_at": now_str}
                 record_stats("recompute", 0)
                 source = "recompute"
@@ -734,12 +744,12 @@ def process_financials(stock_id, refresh_mode=False, allow_full=True):
                         "latest_income_date": latest_inc_date, "latest_quarter": new_res.get("latestCompleteQuarter"),
                         "complete": not new_res.get("latestQuarterPartial"), "checked_at": now_str, "updated_at": now_str
                     }).execute()
-                except Exception: pass
+                except Exception as e: log_db_write_error(stock_id, "stock_results", e)
                 result = new_res
             else:
                 try:
                     supabase.table("stock_results").update({"checked_at": now_str}).eq("stock_id", stock_id).execute()
-                except Exception: pass
+                except Exception as e: log_db_write_error(stock_id, "stock_results.checked_at", e)
                 result = db_res["result"]
                 updated_at_val = db_res.get("updated_at", now_str)
                 
@@ -808,7 +818,7 @@ def full_fetch_financials(stock_id, use_db=True):
                 "latest_income_date": latest_inc_date, "latest_quarter": new_res.get("latestCompleteQuarter"),
                 "complete": not new_res.get("latestQuarterPartial"), "checked_at": now_str, "updated_at": now_str
             }).execute()
-        except Exception: pass
+        except Exception as e: log_db_write_error(stock_id, "stock_results", e)
     elif supabase is not None:
         new_res["warnings"].append(DB_FALLBACK_WARNING)
 
@@ -905,12 +915,12 @@ def process_monthly(stock_id, refresh_mode=False):
                         "stock_id": stock_id, "result": new_res,
                         "latest_date": latest_date, "checked_at": now_str, "updated_at": now_str
                     }).execute()
-                except Exception: pass
+                except Exception as e: log_db_write_error(stock_id, "monthly_results", e)
                 result = new_res
             else:
                 try:
                     supabase.table("monthly_results").update({"checked_at": now_str}).eq("stock_id", stock_id).execute()
-                except Exception: pass
+                except Exception as e: log_db_write_error(stock_id, "monthly_results.checked_at", e)
                 result = db_res["result"]
                 updated_at_val = db_res.get("updated_at", now_str)
                 
@@ -948,7 +958,7 @@ def full_fetch_monthly(stock_id, use_db=True):
                 "stock_id": stock_id, "result": new_res,
                 "latest_date": latest_date, "checked_at": now_str, "updated_at": now_str
             }).execute()
-        except Exception: pass
+        except Exception as e: log_db_write_error(stock_id, "monthly_results", e)
 
     source = "full" if use_db or supabase is None else "finmind-direct"
     new_res["fetchedAt"] = now_str
@@ -983,32 +993,42 @@ def api_ping():
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
-@app.route('/api/health', methods=['GET'])
-def api_health():
-    db_ok = False
-    db_err = "Not Configured"
+health_db_cache = TTLCache(ttl=60, maxsize=1)
+
+def check_db_health():
+    """資料庫連線檢查，60 秒內共用結果，避免被大量呼叫時每次都查資料庫"""
+    cached = health_db_cache.get("db")
+    if cached is not None:
+        return cached
+    db_ok, db_err = False, "Not Configured"
     if supabase:
         try:
             supabase.table("stock_results").select("stock_id").limit(1).execute()
-            db_ok = True
-            db_err = ""
+            db_ok, db_err = True, ""
         except Exception as e:
             db_err = type(e).__name__
-    return jsonify({
-        "ok": True,
-        "calcVersion": CALC_VERSION,
-        "time": get_iso_now(),
-        "python_version": sys.version,
-        "env_vars": {
-            "FINMIND_TOKEN": bool(FINMIND_TOKEN),
-            "SUPABASE_URL": bool(SUPABASE_URL),
-            "SUPABASE_SERVICE_KEY": bool(SUPABASE_KEY),
-            "ALLOWED_ORIGINS": bool(ALLOWED_ORIGINS),
-            "ADMIN_KEY": bool(ADMIN_KEY)
-        },
-        "supabase_connected": db_ok,
-        "supabase_error": db_err
-    })
+    health_db_cache.set("db", (db_ok, db_err))
+    return db_ok, db_err
+
+@app.route('/api/health', methods=['GET'])
+def api_health():
+    """一般呼叫只回傳是否正常與資料庫是否連上（keepalive 工作流程用）；
+    Python 版本、環境變數是否設定等細節只回給管理員（X-Admin-Key）"""
+    db_ok, db_err = check_db_health()
+    body = {"ok": True, "calcVersion": CALC_VERSION, "time": get_iso_now(), "supabase_connected": db_ok}
+    if is_admin_request():
+        body.update({
+            "python_version": sys.version,
+            "env_vars": {
+                "FINMIND_TOKEN": bool(FINMIND_TOKEN),
+                "SUPABASE_URL": bool(SUPABASE_URL),
+                "SUPABASE_SERVICE_KEY": bool(SUPABASE_KEY),
+                "ALLOWED_ORIGINS": bool(ALLOWED_ORIGINS),
+                "ADMIN_KEY": bool(ADMIN_KEY)
+            },
+            "supabase_error": db_err,
+        })
+    return jsonify(body)
 
 @app.route('/api/stock/<stock_id>', methods=['GET'])
 def api_get_stock(stock_id):
@@ -1245,8 +1265,8 @@ def admin_recompute_all():
                     "complete": not new_res.get("latestQuarterPartial"),
                     "checked_at": now_str, "updated_at": now_str
                 }).execute()
-            except Exception:
-                pass
+            except Exception as e:
+                log_db_write_error(sid, "stock_results", e)
             
             if "TaiwanStockMonthRevenue" in raw_dict:
                 m_res = compute_monthly_from_raw(sid, raw_dict)
@@ -1257,8 +1277,8 @@ def admin_recompute_all():
                         "latest_date": m_latest,
                         "checked_at": now_str, "updated_at": now_str
                     }).execute()
-                except Exception:
-                    pass
+                except Exception as e:
+                    log_db_write_error(sid, "monthly_results", e)
     return jsonify({"msg": f"共 {len(stocks)} 檔股票重算完成"})
 
 @app.route('/api/admin/clear-cache', methods=['POST'])
@@ -1291,7 +1311,27 @@ from prices import register_prices
 register_news(app, supabase=supabase)
 register_etf(app, supabase=supabase, get_holding_details=get_holding_details)
 register_quotes(app, get_industry_map=get_industry_map)
-register_prices(app, supabase=supabase, fetch_finmind=fetch_finmind_data, get_price_map=get_price_map)
+# 股價功能的 FinMind 呼叫：計入統計，並限制每小時最多 PRICE_FINMIND_HOURLY_CAP 次，
+# 保留至少一半的額度給財報查詢（免費帳號每小時 600 次，整個 Token 共用）
+try:
+    PRICE_FINMIND_HOURLY_CAP = int(os.getenv("PRICE_FINMIND_HOURLY_CAP", 300))
+except (TypeError, ValueError):
+    PRICE_FINMIND_HOURLY_CAP = 300
+price_finmind_calls = []  # 最近一小時的呼叫時間
+stats["price_finmind_calls"] = 0
+
+def fetch_finmind_for_prices(dataset, stock_id=None, start_date=START_DATE):
+    now = time.time()
+    with global_lock:
+        price_finmind_calls[:] = [t for t in price_finmind_calls if now - t < 3600]
+        if len(price_finmind_calls) >= PRICE_FINMIND_HOURLY_CAP:
+            return None, "PRICE_HOURLY_CAP"
+        price_finmind_calls.append(now)
+        stats["finmind_calls"] += 1
+        stats["price_finmind_calls"] += 1
+    return fetch_finmind_data(dataset, stock_id, start_date)
+
+register_prices(app, supabase=supabase, fetch_finmind=fetch_finmind_for_prices, get_price_map=get_price_map)
 conference_store = register_mops(app, supabase=supabase)
 def prefetch_financials(stock_id):
     """推薦清單的背景預先載入：只在資料庫可用時抓（結果要存進資料庫才有意義），並放進記憶體快取。
