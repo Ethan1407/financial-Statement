@@ -35,6 +35,7 @@
 | 頁面 | 說明 |
 | --- | --- |
 | **已查詢股票** `index.html` | 管理自選股，依代號或燈號嚴重程度排序；同時列出曾查詢但未加入自選的公司與 ETF，以及依查詢紀錄列出的同類型公司。 |
+| **股價走勢** `prices.html` | 自選股價格總覽（盤中每 15 秒更新即時成交價，其他時間顯示收盤價）、近一月迷你走勢、52 週區間、本益比；個股日／週／月 K 線與均線，標出每季財報燈號、法說會與除權息日；本益比河流圖與還原權息報酬率比較。 |
 | **警訊總覽** `alerts.html` | 彙整所有自選股觸發的警訊，可依公司分組或依嚴重程度排序，並篩選紅燈／黃燈。 |
 | **個股詳情** `details.html` | 近 8 季風險分數趨勢、五維健康度雷達圖、損益表／財務狀況表／現金流量表／月營收明細、年報與財報等官方連結、法人說明會（領先指標），以及附利多／利空標記的相關新聞。 |
 | **投資組合健檢** `portfolio.html` | 把 ETF 拆解成底層成分股並與個股持倉加總，算出真實持股比例、產業曝險、ETF 成分重疊度與集中度（HHI）。 |
@@ -45,9 +46,12 @@
 - **同類型公司推薦**：依瀏覽器裡的查詢紀錄（自選股權重 2、其他已查詢 1）統計最常研究的產業，列出同產業、還沒查過的公司；沒有查詢紀錄時，改從查過的 ETF 成分股或其他使用者最近查詢的公司開始。興趣輪廓只在瀏覽器計算，後端只收到產業名稱。推薦只依產業類別，不依燈號或財務表現排序，並附免責聲明，可隨時關閉。點擊率與回饋只記匿名合計（`/api/recommend/stats`）。
 
 - **19 條財報警訊規則**：涵蓋損益表、資產負債表、現金流量表，分為 🔴 紅燈（警戒）與 🟡 黃燈（注意）。
+- **5 條股價警訊規則**：交易所變更交易方法（全額交割）、注意／處置且股價下跌、股價大幅落後大盤、波動度異常、違約距離過近，和財報規則一起計入燈號與風險分數。門檻依 Campbell, Hilscher & Szilagyi (2008) 破產公司的統計值與 Bharath & Shumway (2008) 的違約距離模型，採最不容易誤判的數字；股價弱勢單獨出現為黃燈，財報也有紅燈時升為紅燈。依據列在「規則與說明」頁。
 - **依產業調整門檻**：依證交所產業別自動判斷公司類型（電子、景氣循環、成長、零售、營建、金融……），減少因產業特性造成的誤判；也可在個股詳情手動更改。
 - **ETF 透視**：投資組合可混合輸入個股與 ETF，以矩陣乘法 `vᵀ · W` 算出每家公司的真實曝險，找出不同 ETF 重壓同一批股票的情況。
 - **持股只存在本機**：自選股、投資組合與股數都存在瀏覽器 `localStorage`，不會上傳到伺服器。
+- **股價即時與省流量兼顧**：盤中（週一至週五 9:00～13:35）才向證交所即時報價 API 抓成交價，同一檔 10 秒內所有使用者共用一次結果；其他時間 30 分鐘才更新一次，抓不到時改用每日收盤價。K 線歷史存在資料庫，之後每天只補新的幾天。
+- **還原股價自己算**：FinMind 的還原股價需要付費，改用免費的除權息結果與股票分割資料換算調整係數；股票分割一律調整，配息可在 K 線切換是否還原。
 - **淺色／深色主題**切換。
 
 ---
@@ -110,7 +114,7 @@ flowchart LR
 
 | 層級 | 技術 |
 | --- | --- |
-| 前端 | HTML、CSS、Vanilla JavaScript、[Chart.js](https://www.chartjs.org/) |
+| 前端 | HTML、CSS、Vanilla JavaScript、[Chart.js](https://www.chartjs.org/)、[Lightweight Charts](https://github.com/tradingview/lightweight-charts)（K 線） |
 | 後端 | Python、Flask、Flask-CORS、Gunicorn |
 | 資料庫 | [Supabase](https://supabase.com/)（PostgreSQL） |
 | 資料來源 | [FinMind](https://finmindtrade.com/)、[證交所 OpenAPI](https://openapi.twse.com.tw/)、[櫃買中心 OpenAPI](https://www.tpex.org.tw/openapi/)、MoneyDJ、Google News／Bing News RSS |
@@ -128,21 +132,25 @@ Financial Statements/
 ├── quotes.py          # 上市櫃全市場收盤價（證交所、櫃買中心）
 ├── mops.py            # 法人說明會（公開資訊觀測站，每日整批同步）
 ├── recommend.py       # 同類型公司推薦與匿名回饋統計
+├── prices.py          # 股價：盤中即時報價、日 K 歷史、除權息／分割調整、總覽摘要
 ├── common.py          # 共用工具：TTLCache、LockRegistry、管理員驗證、時間處理
 ├── requirements.txt
 │
 ├── index.html         # 已查詢股票
+├── prices.html        # 股價走勢
 ├── alerts.html        # 警訊總覽
 ├── details.html       # 個股詳情
 ├── portfolio.html     # 投資組合健檢
 ├── rules.html         # 規則與說明
 ├── css/style.css
+├── css/prices.css     # 股價走勢頁專用樣式
 └── js/
     ├── app.js         # 共用邏輯：API 位址、自選股、主題、個股頁面
     ├── rules.js       # 警訊規則、產業類型設定、健康度評分
     ├── etf.js         # ETF 顯示與成分股
     ├── portfolio.js   # 投資組合透視計算
-    └── recommend.js   # 興趣輪廓（只在瀏覽器計算）與同類型公司推薦
+    ├── recommend.js   # 興趣輪廓（只在瀏覽器計算）與同類型公司推薦
+    └── prices.js      # 股價總覽、K 線、本益比河流圖、報酬率比較（Lightweight Charts）
 ```
 
 ---
@@ -261,6 +269,10 @@ python -m http.server 8080
 | `GET` | `/api/news/<stock_id>` | 相關新聞，附利多／利空／中立標記 |
 | `GET` | `/api/etf/<etf_id>` | ETF 成分股與權重 |
 | `GET` | `/api/quotes?ids=0050,2330` | 最近收盤價與產業別，最多 60 檔 |
+| `GET` | `/api/prices/live?ids=2330,0050` | 即時報價（盤中）或最近收盤價，最多 60 檔；回傳 `marketOpen`、建議的更新間隔 `pollSeconds` |
+| `GET` | `/api/prices/history/<stock_id>` | 2019 年起的日 K（開高低收、成交張數）與除權息／分割調整係數 |
+| `GET` | `/api/prices/risk?ids=2330,2317` | 股價健康度指標：證交所／櫃買中心注意、處置、變更交易方法名單，近 3 月波動度與超額報酬（對 0050），違約距離（naive Merton DD），最多 60 檔 |
+| `GET` | `/api/prices/summary?ids=2330,0050` | 近一月收盤價（迷你走勢圖）與 52 週最高／最低，最多 60 檔 |
 | `GET` | `/api/conferences/<stock_id>` | 法人說明會（過去 12 個月、當月與下個月），附同步狀態與收錄範圍 |
 | `GET` | `/api/recommend/peers/<stock_id>` | 同產業公司（已有財報快取的排前面，不依財務表現排序） |
 | `GET` | `/api/recommend/industries?names=半導體業,金融保險` | 依產業名稱列出公司，最多 5 個產業 |
@@ -346,6 +358,7 @@ curl -X POST -H "X-Admin-Key: $ADMIN_KEY" http://127.0.0.1:5000/api/admin/clear-
 - [MoneyDJ](https://www.moneydj.com/)：ETF 成分股
 - [公開資訊觀測站](https://mopsov.twse.com.tw/mops/web/t100sb02_1)：法人說明會一覽表
 - [Chart.js](https://www.chartjs.org/)：圖表
+- [TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts)：K 線圖（Apache 2.0）
 - README 結構參考 [awesome-readme](https://github.com/matiassingers/awesome-readme) 與 [Standard Readme](https://github.com/RichardLitt/standard-readme)
 
 ## 📄 授權

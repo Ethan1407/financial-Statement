@@ -35,7 +35,22 @@ def parse_price(val):
         return None
 
 
-def fetch_market(url, code_key, name_key, close_key):
+def parse_change(val):
+    """漲跌價差：+0.01、-75.0000；除權息、新上市等沒有比較基準時為空或非數字"""
+    try:
+        return float(str(val).replace(",", "").replace("+", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+# 兩個來源的欄位名稱不同；market 是證交所即時報價 API 使用的市場代碼（tse 上市、otc 上櫃）
+TWSE_FIELDS = {"market": "tse", "code": "Code", "name": "Name", "close": "ClosingPrice", "change": "Change",
+               "open": "OpeningPrice", "high": "HighestPrice", "low": "LowestPrice", "volume": "TradeVolume"}
+TPEX_FIELDS = {"market": "otc", "code": "SecuritiesCompanyCode", "name": "CompanyName", "close": "Close", "change": "Change",
+               "open": "Open", "high": "High", "low": "Low", "volume": "TradingShares"}
+
+
+def fetch_market(url, fields):
     try:
         resp = requests.get(url, headers=HTTP_HEADERS, timeout=30)
         resp.raise_for_status()
@@ -45,9 +60,16 @@ def fetch_market(url, code_key, name_key, close_key):
         return {}
     result = {}
     for row in rows:
-        code, price = str(row.get(code_key, "")).strip(), parse_price(row.get(close_key))
+        code, price = str(row.get(fields["code"], "")).strip(), parse_price(row.get(fields["close"]))
         if code and price:
-            result[code] = {"name": str(row.get(name_key, "")).strip(), "price": price, "date": roc_to_iso(row.get("Date"))}
+            shares = parse_price(row.get(fields["volume"]))
+            result[code] = {
+                "name": str(row.get(fields["name"], "")).strip(), "price": price, "date": roc_to_iso(row.get("Date")),
+                "market": fields["market"], "change": parse_change(row.get(fields["change"])),
+                "open": parse_price(row.get(fields["open"])), "high": parse_price(row.get(fields["high"])),
+                "low": parse_price(row.get(fields["low"])),
+                "volume": round(shares / 1000) if shares else 0,  # 股 → 張
+            }
     return result
 
 
@@ -56,8 +78,8 @@ def get_price_map():
         cached = price_cache.get("all")
         if cached is not None:
             return cached
-        prices = fetch_market(TPEX_URL, "SecuritiesCompanyCode", "CompanyName", "Close")
-        prices.update(fetch_market(TWSE_URL, "Code", "Name", "ClosingPrice"))
+        prices = fetch_market(TPEX_URL, TPEX_FIELDS)
+        prices.update(fetch_market(TWSE_URL, TWSE_FIELDS))
         if prices:  # 兩邊都失敗時不快取，下次再試
             price_cache.set("all", prices)
         return prices

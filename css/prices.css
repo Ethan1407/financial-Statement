@@ -1,0 +1,92 @@
+/* ================= 股價走勢頁（prices.html） ================= */
+/* 台股習慣：紅漲綠跌 */
+.px-up { color: var(--red); }
+.px-down { color: var(--green); }
+.px-flat { color: var(--text-light); }
+
+.px-head { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; }
+.px-head h2 { margin-bottom: 6px; }
+.px-status { font-size: 0.9rem; color: var(--text-light); line-height: 1.6; }
+.px-status .px-live-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: var(--text-light); vertical-align: middle; }
+.px-status[data-state="open"] .px-live-dot { background: var(--green); box-shadow: 0 0 6px var(--green); animation: px-pulse 1.6s ease-in-out infinite; }
+.px-status[data-state="error"] .px-live-dot { background: var(--yellow); }
+@keyframes px-pulse { 50% { opacity: 0.35; } }
+.px-head-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* 總覽表 */
+.px-table { min-width: 0; }
+.px-table th, .px-table td { padding: 10px 8px; white-space: nowrap; }
+.px-table td.num, .px-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.px-table tbody tr { cursor: pointer; transition: background-color 0.15s; }
+.px-table tbody tr:hover { background: rgba(59, 130, 246, 0.06); }
+.px-table tbody tr.selected { background: rgba(59, 130, 246, 0.12); }
+.px-name { display: flex; flex-direction: column; gap: 2px; }
+.px-name strong { color: var(--primary); }
+.px-name span { font-size: 0.8rem; color: var(--text-light); max-width: 9em; overflow: hidden; text-overflow: ellipsis; }
+.px-price { font-weight: bold; font-size: 1.05rem; }
+.px-sub { display: block; font-size: 0.75rem; color: var(--text-light); font-weight: normal; }
+.px-spark { display: block; }
+.px-range { position: relative; width: 110px; height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--green), var(--yellow), var(--red)); opacity: 0.85; margin: 4px 0; }
+.px-range-dot { position: absolute; top: 50%; width: 12px; height: 12px; border-radius: 50%; background: var(--card-bg); border: 2px solid var(--text); transform: translate(-50%, -50%); }
+.px-range-labels { display: flex; justify-content: space-between; width: 110px; font-size: 0.7rem; color: var(--text-light); }
+.px-flash-up { animation: px-flash-up 1s ease-out; }
+.px-flash-down { animation: px-flash-down 1s ease-out; }
+@keyframes px-flash-up { from { background-color: rgba(239, 68, 68, 0.3); } }
+@keyframes px-flash-down { from { background-color: rgba(16, 185, 129, 0.3); } }
+
+/* K 線卡片 */
+.px-chart-head { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.px-chart-title { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+.px-chart-title .px-big { font-size: 1.6rem; font-weight: bold; }
+.px-toolbar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 10px; }
+.px-seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.px-seg button { background: transparent; color: var(--text-light); border-radius: 0; padding: 6px 10px; font-weight: normal; font-size: 0.85rem; border-right: 1px solid var(--border); }
+.px-seg button:last-child { border-right: none; }
+.px-seg button.active { background: var(--primary); color: #fff; font-weight: bold; }
+.px-toggles { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.85rem; color: var(--text-light); }
+.px-toggles label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+.px-swatch { display: inline-block; width: 12px; height: 3px; border-radius: 2px; }
+/* 開高低收一行、標記說明兩行，高度都固定，K 線圖不會因為文字多寡上下跳動 */
+.px-legend { height: 1.7em; overflow: hidden; font-size: 0.82rem; line-height: 1.7em; color: var(--text-light); display: flex; flex-wrap: wrap; align-content: flex-start; column-gap: 12px; font-variant-numeric: tabular-nums; }
+.px-legend b { color: var(--text); font-weight: 600; }
+.px-legend { margin-bottom: 6px; }
+
+/* 滑鼠移到有標記的日期時，旁邊跳出的小視窗：可以把滑鼠移進去直接點連結 */
+.px-tip { display: none; position: absolute; z-index: 6; width: max-content; max-width: min(320px, calc(100% - 8px)); padding: 10px 12px; border-radius: 8px;
+  background: var(--card-bg); border: 1px solid var(--primary); box-shadow: 0 8px 20px rgba(0,0,0,0.35); line-height: 1.5; }
+.px-tip-item + .px-tip-item { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.px-tip-item strong { display: block; font-size: 0.95rem; color: var(--text); }
+.px-tip-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.px-tip-links a { font-size: 0.85rem; padding: 3px 10px; border: 1px solid var(--primary); border-radius: 12px; white-space: nowrap; }
+.px-tip-links a:hover { background: var(--primary); color: #fff; }
+.px-tip-none { display: block; margin-top: 4px; font-size: 0.8rem; color: var(--text-light); }
+
+/* 查詢股票 */
+.px-search-card { display: flex; flex-direction: column; gap: 8px; }
+.px-search-label { font-weight: bold; }
+.px-search-card .stock-search { max-width: 520px; }
+
+/* 自選股超過 10 檔時的下拉選單 */
+.px-more { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; font-size: 0.9rem; color: var(--text-light); }
+.px-more select { min-width: 220px; max-width: 100%; }
+.px-chart-box { position: relative; height: 440px; width: 100%; }
+.px-chart-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; padding: 24px; color: var(--text-light); background: var(--card-bg); z-index: 5; line-height: 1.6; }
+.px-note { font-size: 0.8rem; color: var(--text-light); line-height: 1.6; margin-top: 10px; }
+
+/* 長期趨勢 */
+.px-long-summary { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-bottom: 12px; line-height: 1.7; font-size: 0.92rem; }
+.px-zone { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 0.8rem; font-weight: bold; color: #fff; }
+.px-compare-picks { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 10px; font-size: 0.88rem; }
+.px-compare-picks label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.px-compare-table { min-width: 0; margin-top: 12px; font-size: 0.88rem; }
+.px-compare-table th, .px-compare-table td { padding: 8px; }
+.px-compare-table td.num, .px-compare-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 640px) {
+  .px-chart-box { height: 360px; }
+  .px-table th, .px-table td { padding: 8px 5px; font-size: 0.88rem; }
+  /* 手機版隱藏成交量、52 週區間、本益比，保留股票、價格、漲跌幅、迷你走勢 */
+  .px-table .px-col-vol, .px-table .px-col-range, .px-table .px-col-pe, .px-table .px-col-chg { display: none; }
+  .px-chart-title .px-big { font-size: 1.35rem; }
+  .px-legend { height: 3.4em; } /* 手機寬度不夠，開高低收固定佔兩行 */
+}

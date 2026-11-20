@@ -116,6 +116,7 @@ function checkBackendAwake() {
       setServerStatus('offline', '無法連線', networkErrorReason());
     }
     if (ok) autoSyncStale();
+    if (ok) syncMarketRisk();
     if (ok) {
       if (!banner) return; // 主機本來就醒著，不顯示橫幅
       setBanner('ready', `✅ 主機已啟動（花了 ${elapsedSec()} 秒），可以正常使用了。`);
@@ -257,6 +258,42 @@ async function autoSyncStale() {
   }
 }
 
+// ================= 股價健康度資料（rules.js 的股價規則使用） =================
+// 向 /api/prices/risk 取得官方注意／處置／變更交易名單、波動度、超額報酬、違約距離，存在 localStorage（market_risk）。
+// 每 3 小時最多更新一次；拿到後重畫目前頁面，燈號與風險分數會納入股價規則。
+const MARKET_RISK_REFRESH_MS = 3 * 3600 * 1000;
+let marketRiskSyncing = false;
+async function syncMarketRisk(force = false) {
+  if (marketRiskSyncing) return;
+  const db = loadStockDatabase();
+  const ids = [...new Set([...portfolio, ...Object.keys(db)])]
+    .filter(id => /^[0-9]{4,6}$/.test(id) && !isEtfId(id) && db[id] && !db[id].isEtf).slice(0, 60);
+  if (!ids.length) return;
+  let store = {};
+  try { store = JSON.parse(localStorage.getItem(MARKET_RISK_KEY)) || {}; } catch {}
+  const data = store.data || {};
+  const now = Date.now();
+  const stale = ids.filter(id => force || !data[id] || now - data[id].fetchedAt > MARKET_RISK_REFRESH_MS);
+  if (!stale.length) return;
+  marketRiskSyncing = true;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 120000);
+    const res = await fetch(`${API_BASE}/api/prices/risk?ids=${stale.join(',')}`, { signal: controller.signal }).finally(() => clearTimeout(timer));
+    if (!res.ok) return;
+    const body = await res.json();
+    Object.entries(body.risk || {}).forEach(([id, v]) => { if (v && !v.error) data[id] = { ...v, fetchedAt: now }; });
+    // 只保留還在瀏覽器裡的股票
+    Object.keys(data).forEach(id => { if (!db[id]) delete data[id]; });
+    try { localStorage.setItem(MARKET_RISK_KEY, JSON.stringify({ data })); } catch {}
+    rerenderCurrentPage();
+  } catch (err) {
+    // 取不到股價資料時，燈號只用財報判斷（股價規則列為「資料不足」）
+  } finally {
+    marketRiskSyncing = false;
+  }
+}
+
 function isEtfId(id) { return /^00\d{2,4}[A-Za-z]?$/.test(id || ''); }
 
 // 預設自選股的靜態快照（data/seed/，由 GitHub Actions 每天更新），跟網頁一起放在 Vercel，
@@ -297,6 +334,7 @@ async function seedDefaultPortfolio() {
 function rerenderCurrentPage() {
   if (document.getElementById('tracked-grid')) renderStockOverview();
   if (document.getElementById('alerts-list')) renderAlerts();
+  if (document.getElementById('px-table') && typeof pxRenderTable === 'function') pxRenderTable(); // 股價頁：財報更新後重算本益比
   if (document.getElementById('detail-stock-select')) {
       // 第一次造訪直接開 details.html?id=2330 時，資料是之後才載入的，載入後補畫個股內容
       const urlId = new URLSearchParams(window.location.search).get('id');
@@ -328,6 +366,12 @@ function setActiveNav() {
   document.querySelectorAll('.nav-links a').forEach(link => {
     link.classList.toggle('active', pageName(link.getAttribute('href')) === current);
   });
+  // 手機版導覽列可左右滑動：把目前頁面的分頁捲到看得到的位置（只捲導覽列，不捲整頁）
+  const nav = document.querySelector('.nav-links');
+  const active = nav && nav.querySelector('a.active');
+  if (active && nav.scrollWidth > nav.clientWidth) {
+    nav.scrollLeft = active.offsetLeft - nav.offsetLeft - (nav.clientWidth - active.offsetWidth) / 2;
+  }
 }
 
 // 外部資料（股名、產業、錯誤訊息）塞進 innerHTML 前必須跳脫，避免 XSS
@@ -446,6 +490,7 @@ async function syncStock(id, btn, addToPortfolio = false) {
       renderStockOverview();
       updateDetailSelect();
       fetch(`${API_BASE}/api/monthly/${id}${isUpdating ? '?refresh=1' : ''}`).catch(() => console.log('月營收更新略過'));
+      syncMarketRisk(); // 新加入的股票補上股價規則需要的資料（已是最新的會略過）
       return true;
   } finally {
       btn.innerText = originalText;
@@ -1402,11 +1447,16 @@ function submitMopsForm(action, fields) {
   form.remove();
 }
 
-// 觀測站的簡報下載是送出表單（POST），不是一般網址。由使用者的瀏覽器送出與觀測站頁面相同的表單，
-// 在新分頁開啟官方檔案；本站不經手、也不保存檔案。
+// 觀測站的簡報：PDF 直接用官方網址在新分頁開啟，瀏覽器會內建顯示、不會下載檔案；
+// PowerPoint 檔瀏覽器無法顯示，才用觀測站頁面同樣的表單（POST）下載。本站不經手、也不保存檔案。
 const MOPS_FILE_RE = /^[A-Za-z0-9_-]+\.(pdf|pptx?|PDF|PPTX?)$/;
+function mopsSlideUrl(fileName) {
+  return /\.pdf$/i.test(fileName) && MOPS_FILE_RE.test(fileName) ? `https://mopsov.twse.com.tw/nas/STR/${fileName}` : null;
+}
 function openMopsSlide(fileName) {
   if (!MOPS_FILE_RE.test(fileName)) return;
+  const url = mopsSlideUrl(fileName);
+  if (url) { window.open(url, '_blank', 'noopener'); return; }
   submitMopsForm('https://mopsov.twse.com.tw/server-java/FileDownLoad', { step: '9', filePath: '/home/html/nas/STR/', fileName, functionName: 't100sb02_1' });
 }
 

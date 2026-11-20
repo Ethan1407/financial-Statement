@@ -62,7 +62,7 @@ MANUAL_CHECK_INTERVAL = 600
 
 RATE_LIMIT = 30
 RATE_WINDOW = 60
-RATE_LIMITED_PREFIXES = ('/api/stock', '/api/monthly', '/api/news', '/api/etf', '/api/quotes', '/api/conferences', '/api/recommend')
+RATE_LIMITED_PREFIXES = ('/api/stock', '/api/monthly', '/api/news', '/api/etf', '/api/quotes', '/api/conferences', '/api/recommend', '/api/prices')
 
 try:
     TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", 1))
@@ -1287,9 +1287,11 @@ from etf import register_etf
 from quotes import register_quotes, get_price_map
 from mops import register_mops
 from recommend import register_recommend
+from prices import register_prices
 register_news(app, supabase=supabase)
 register_etf(app, supabase=supabase, get_holding_details=get_holding_details)
 register_quotes(app, get_industry_map=get_industry_map)
+register_prices(app, supabase=supabase, fetch_finmind=fetch_finmind_data, get_price_map=get_price_map)
 conference_store = register_mops(app, supabase=supabase)
 def prefetch_financials(stock_id):
     """推薦清單的背景預先載入：只在資料庫可用時抓（結果要存進資料庫才有意義），並放進記憶體快取。

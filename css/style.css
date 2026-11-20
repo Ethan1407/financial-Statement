@@ -416,22 +416,22 @@ button.btn-danger { background-color: var(--red); color: #fff; }
   .change-compare { flex-direction: column; }
 }
 
-/* ================= 導覽列：桌機顯示完整名稱，手機改為底部分頁列 ================= */
+/* ================= 導覽列：桌機顯示完整名稱，手機改為頂部可左右滑動的一列 ================= */
 .nav-icon, .nav-short { display: none; }
 @media (max-width: 640px) {
   .nav-links {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 200; order: 0; width: auto; max-width: none;
-    display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; overflow: visible; white-space: normal;
-    padding: 4px 4px calc(4px + env(safe-area-inset-bottom)); background-color: var(--nav-bg);
-    border-top: 1px solid var(--border); box-shadow: 0 -2px 10px rgba(0,0,0,0.15);
+    gap: 4px; padding: 6px 0 4px; overflow-x: auto; overflow-y: hidden; white-space: nowrap;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none; overscroll-behavior-x: contain;
+    /* 右側淡出，提示還可以往右滑 */
+    -webkit-mask-image: linear-gradient(to right, #000 88%, transparent); mask-image: linear-gradient(to right, #000 88%, transparent);
   }
-  .nav-links a { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 2px; font-size: 0.72rem; line-height: 1.2; text-align: center; border-radius: 6px; min-width: 0; }
-  .nav-icon { display: block; font-size: 1.15rem; line-height: 1.2; }
+  .nav-links::-webkit-scrollbar { display: none; }
+  .nav-links a { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; padding: 6px 10px; font-size: 0.9rem; border-radius: 6px; }
+  .nav-links a:last-child { margin-right: 24px; } /* 滑到最右邊時，最後一項不會被淡出遮住 */
+  .nav-icon { display: inline; font-size: 1rem; }
   .nav-full { display: none; }
-  .nav-short { display: block; white-space: nowrap; }
-  /* 底部分頁列會蓋住頁面最下方，留出空間 */
-  body { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
-  #toast-container { left: 16px; right: 16px; bottom: calc(76px + env(safe-area-inset-bottom)); max-width: none; }
+  .nav-short { display: inline; }
+  #toast-container { left: 16px; right: 16px; max-width: none; }
 }
 
 /* ================= 投資組合健檢：手機版表格隱藏次要欄位，不必左右捲動 ================= */

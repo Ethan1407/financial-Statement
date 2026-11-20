@@ -372,6 +372,104 @@ const RULES_CONFIG = {
 };
 
 // ==========================================
+// 3-1. 股價規則（market: true）
+// ==========================================
+// 股價資料由後端 /api/prices/risk 計算，存在瀏覽器 localStorage（market_risk），analyzeData 以 ctx.market 傳入。
+// 門檻採「最不容易誤判」的數字：
+// - 波動度、超額報酬：Campbell, Hilscher & Szilagyi (2008) Table 2 中「破產公司」的平均值
+//   （全體公司：年化波動度平均 56.2%、月超額報酬平均 −1.1%；破產公司：106.1%、−11.5%），正常公司很少達到。
+// - 違約距離：Bharath & Shumway (2008) 的 naive DD。文獻沒有公認的絕對門檻，取很嚴格的 1（模型違約機率約 16%）與 0（約 50%）。
+// - 官方名單：證交所、櫃買中心每日公布的注意、處置、變更交易方法股票。
+// 波動度與落後大盤單獨觸發為黃燈；同一家公司若也有財報紅燈則升為紅燈（市場與財報變數一起看，預測力最好）。
+const MARKET_RISK_KEY = 'market_risk';
+const MARKET_RISK_MAX_AGE_MS = 3 * 86400 * 1000; // 超過 3 天的股價資料不拿來判斷，避免用過期的名單
+
+function loadMarketRisk() {
+    try {
+        const store = JSON.parse(localStorage.getItem(MARKET_RISK_KEY)) || {};
+        const now = Date.now();
+        const out = {};
+        Object.entries(store.data || {}).forEach(([id, v]) => {
+            if (v && v.fetchedAt && now - v.fetchedAt < MARKET_RISK_MAX_AGE_MS) out[id] = v;
+        });
+        return out;
+    } catch (err) {
+        return {};
+    }
+}
+
+const pct1 = v => `${(v * 100).toFixed(1)}%`;
+const marketSkip = (ctx, field) => !ctx || !ctx.market || ctx.market.error || (field && ctx.market[field] == null);
+// 財報已有紅燈時，股價弱勢升為紅燈
+const escalate = (ctx) => (ctx && ctx.hasFinancialRed ? 'red' : 'yellow');
+
+Object.assign(RULES_CONFIG, {
+    officialAltered: {
+        name: "變更交易方法（全額交割）", level: "red", tab: 'market', market: true,
+        why: () => `證交所或櫃買中心將股票改為全額交割、分盤交易或列為管理股票（多因財務異常，例如淨值低於股本一半、未依期限公告財報）`,
+        check: (data, config, ctx) => {
+            if (marketSkip(ctx)) return { status: 'skipped' };
+            const hit = (ctx.market.flags || []).find(f => f.type === 'altered');
+            if (hit) return { status: 'alert', text: hit.text };
+            return ctx.market.flagsComplete ? { status: 'pass' } : { status: 'skipped' };
+        }
+    },
+    officialWarning: {
+        name: "交易所注意／處置且股價下跌", level: "yellow", tab: 'market', market: true,
+        why: () => `被證交所或櫃買中心公布為注意或處置股票，且原因是股價跌幅，或近 3 個月表現落後大盤（股價暴漲造成的注意／處置只是交易過熱，不列入）`,
+        check: (data, config, ctx) => {
+            if (marketSkip(ctx)) return { status: 'skipped' };
+            const m = ctx.market;
+            const hits = (m.flags || []).filter(f => f.type === 'notice' || f.type === 'punish');
+            const falling = hits.some(f => /跌/.test(f.text)) || (m.exret3m != null && m.exret3m < 0);
+            if (hits.length && falling) {
+                const punish = hits.find(f => f.type === 'punish');
+                return { status: 'alert', text: (punish || hits[0]).text };
+            }
+            return m.flagsComplete ? { status: 'pass' } : { status: 'skipped' };
+        }
+    },
+    priceUnderperform: {
+        name: "股價大幅落後大盤", level: "yellow", threshold: -0.115, tab: 'market', market: true,
+        why: (c) => `近 3 個月平均每月比大盤（0050 還原權息）少漲 ${pct1(-c.threshold)} 以上（破產公司的平均水準）；若財報也有紅燈則升為紅燈`,
+        check: (data, config, ctx) => {
+            if (marketSkip(ctx, 'exret3m')) return { status: 'skipped' };
+            const v = ctx.market.exret3m;
+            if (v <= config.threshold) {
+                return { status: 'alert', level: escalate(ctx), text: `近 3 個月平均每月比大盤少漲 ${pct1(-v)}${ctx.hasFinancialRed ? '，且財報已有紅燈' : ''}` };
+            }
+            return { status: 'pass' };
+        }
+    },
+    priceVolatility: {
+        name: "股價波動異常偏高", level: "yellow", threshold: 1.061, tab: 'market', market: true,
+        why: (c) => `近 3 個月股價年化波動度達 ${pct1(c.threshold)} 以上（破產公司的平均水準，全體公司平均約 56%）；若財報也有紅燈則升為紅燈`,
+        check: (data, config, ctx) => {
+            if (marketSkip(ctx, 'sigma3m')) return { status: 'skipped' };
+            const v = ctx.market.sigma3m;
+            if (v >= config.threshold) {
+                return { status: 'alert', level: escalate(ctx), text: `近 3 個月年化波動度 ${pct1(v)}${ctx.hasFinancialRed ? '，且財報已有紅燈' : ''}` };
+            }
+            return { status: 'pass' };
+        }
+    },
+    distanceToDefault: {
+        name: "違約距離過近", level: "dynamic", yellowBelow: 1, redBelow: 0, tab: 'market', market: true,
+        why: (c) => `以市值、負債與股價波動計算的違約距離（naive Merton DD）低於 ${c.yellowBelow} 為黃燈、低於 ${c.redBelow} 為紅燈（模型違約機率約 16%、50%）；金融業負債以存款為主，不適用`,
+        check: (data, config, ctx) => {
+            if (!ctx || ctx.effectiveType === 'financial') return { status: 'skipped' };
+            if (marketSkip(ctx, 'dd')) return { status: 'skipped' };
+            const dd = ctx.market.dd;
+            const info = ctx.market.ddInputs || {};
+            const detail = info.marketCap != null ? `（市值 ${info.marketCap} 億、違約點負債 ${info.defaultPoint} 億、股價波動 ${pct1(info.sigmaE)}）` : '';
+            if (dd < config.redBelow) return { status: 'alert', level: 'red', text: `違約距離 ${dd}${detail}` };
+            if (dd < config.yellowBelow) return { status: 'alert', level: 'yellow', text: `違約距離 ${dd}${detail}` };
+            return { status: 'pass' };
+        }
+    }
+});
+
+// ==========================================
 // 4. 產業類型與規則覆蓋設定 (TYPE_PROFILES)
 // ==========================================
 // overrides：{ 規則代號: { disabled: true } } 停用；或覆蓋門檻、燈號（level）等設定
@@ -561,10 +659,15 @@ function analyzeData(stockId, data) {
     let skipped = [];
     let status = 'green';
     let riskScore = 0;
-    
-    for (const key of Object.keys(rules)) {
+
+    // 先跑財報規則，再跑股價規則（股價規則要知道財報是否已有紅燈）
+    const ctx = { market: loadMarketRisk()[stockId] || null, effectiveType, hasFinancialRed: false };
+    const keys = Object.keys(rules);
+    const ordered = [...keys.filter(k => !rules[k].market), ...keys.filter(k => rules[k].market)];
+    for (const key of ordered) {
         const ruleConf = rules[key];
-        const res = ruleConf.check(data.quarters, ruleConf);
+        if (ruleConf.market) ctx.hasFinancialRed = ctx.hasFinancialRed || alerts.some(a => !a.rule.market && (a.detail.level || a.rule.level) === 'red');
+        const res = ruleConf.check(data.quarters, ruleConf, ctx);
         if (res && res.status === 'alert') {
             alerts.push({ rule: ruleConf, detail: res });
             const lvl = res.level || ruleConf.level;

@@ -15,6 +15,7 @@
       <div class="logo">📈 財報健檢儀表板</div>
       <nav class="nav-links">
         <a href="index.html"><span class="nav-icon" aria-hidden="true">📋</span><span class="nav-full">已查詢股票</span><span class="nav-short">已查詢</span></a>
+        <a href="prices.html"><span class="nav-icon" aria-hidden="true">💹</span><span class="nav-full">股價走勢</span><span class="nav-short">股價</span></a>
         <a href="alerts.html"><span class="nav-icon" aria-hidden="true">🚨</span><span class="nav-full">警訊總覽</span><span class="nav-short">警訊</span></a>
         <a href="details.html"><span class="nav-icon" aria-hidden="true">🔎</span><span class="nav-full">個股詳情</span><span class="nav-short">個股</span></a>
         <a href="portfolio.html"><span class="nav-icon" aria-hidden="true">🧺</span><span class="nav-full">投資組合健檢</span><span class="nav-short">組合健檢</span></a>
@@ -52,6 +53,62 @@
       </div>
     </div>
 
+    <!-- 股價規則的依據 -->
+    <div class="card" style="margin-bottom: 24px;">
+      <h3>📈 股價警訊的判斷依據</h3>
+      <p style="margin-top: 8px; color: var(--text-light); line-height: 1.7; font-size: 0.92rem;">
+        只看財報會有落差：財報每季才公布一次，股價卻每天反映市場對公司的看法。學術研究發現，把「股價變數」和「財報變數」一起看，預測公司財務危機的效果比只看財報更好，
+        因此上表「股價」類別的 5 條規則和財報規則一起計入燈號與風險分數（紅燈 25 分、黃燈 10 分）。
+        門檻都採用<strong>最不容易誤判正常公司</strong>的數字，並把財報與股價一起判斷：股價弱勢單獨出現只算黃燈，若同一家公司財報也有紅燈才升為紅燈。
+        股價規則只看最新資料，不納入個股詳情的「歷史風險分數」；ETF 不適用。
+      </p>
+      <div class="table-responsive" style="margin-top: 12px;">
+        <table>
+          <thead><tr><th style="width: 22%">規則</th><th style="width: 30%">門檻</th><th>依據與資料來源</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>變更交易方法（全額交割）</strong></td>
+              <td>名單上有這檔 → 紅燈</td>
+              <td>證交所「集中市場證券變更交易」、櫃買中心「變更交易方法／管理股票」每日名單（官方 OpenAPI）。交易所改變交易方法多半是因為財務異常，例如淨值低於股本一半、未依期限公告財報。</td>
+            </tr>
+            <tr>
+              <td><strong>交易所注意／處置且股價下跌</strong></td>
+              <td>名單上有這檔，且原因是跌幅或近 3 個月落後大盤 → 黃燈</td>
+              <td>證交所、櫃買中心每日公布的注意股票與處置股票（官方 OpenAPI），標準由交易所訂定。股價暴漲也會被列入，但那只是交易過熱、不代表公司變差，為避免誤判不計入。</td>
+            </tr>
+            <tr>
+              <td><strong>股價大幅落後大盤</strong></td>
+              <td>近 3 個月平均每月比大盤少漲 11.5% 以上 → 黃燈（財報也有紅燈時升為紅燈）</td>
+              <td>
+                <a href="https://www.nber.org/papers/w12362" target="_blank" rel="noopener noreferrer">Campbell, Hilscher &amp; Szilagyi (2008) “In Search of Distress Risk”</a>（Journal of Finance）：股價相對大盤的超額報酬越差，公司失敗機率越高。
+                該文 Table 2（約 170 萬筆公司月資料）中，全體公司的月超額報酬平均為 −1.1%，破產公司為 −11.5%；本系統以破產公司的平均值為門檻，並要求連續 3 個月平均都這麼差，避免單月急跌誤判。大盤以 0050 還原權息股價代替。
+              </td>
+            </tr>
+            <tr>
+              <td><strong>股價波動異常偏高</strong></td>
+              <td>近 3 個月年化波動度 ≥ 106.1% → 黃燈（財報也有紅燈時升為紅燈）</td>
+              <td>
+                同上論文：波動度越高，失敗機率越高。Table 2 中全體公司的年化波動度平均 56.2%（中位數 47.1%），破產公司平均 106.1%；本系統以破產公司的平均值為門檻。計算方式與論文相同：近 3 個月每日報酬平方和 × 252 ÷（天數 − 1）再開根號。
+                <a href="https://ideas.repec.org/a/ucp/jnlbus/v74y2001i1p101-24.html" target="_blank" rel="noopener noreferrer">Shumway (2001)</a> 也發現股價報酬、波動度與公司規模和破產高度相關。
+              </td>
+            </tr>
+            <tr>
+              <td><strong>違約距離過近</strong></td>
+              <td>違約距離 &lt; 1 → 黃燈；&lt; 0 → 紅燈；金融業不適用</td>
+              <td>
+                <a href="https://ideas.repec.org/a/oup/rfinst/v21y2008i3p1339-1369.html" target="_blank" rel="noopener noreferrer">Bharath &amp; Shumway (2008)</a>（Review of Financial Studies）的簡化 Merton 模型：用市值、負債（流動負債＋½ 非流動負債）、股價波動度與過去一年報酬，算出公司資產跌到不夠還債還有多遠，預測力略優於完整的 Merton 模型。
+                文獻沒有公認的絕對門檻（論文以排名分組，最高風險的 10% 公司涵蓋約 66% 的違約，但會誤報很多正常公司），因此取很嚴格的數字：1 約等於模型違約機率 16%、0 約等於 50%。
+                <a href="https://web-docs.stern.nyu.edu/salomon/docs/Credit2006/T_Shumway.pdf" target="_blank" rel="noopener noreferrer">（作者簡報：公式與分組結果）</a>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="margin-top: 10px; color: var(--text-light); font-size: 0.85rem; line-height: 1.6;">
+        研究的樣本為美國上市公司，台股有 ±10% 漲跌幅限制，波動度通常較低，因此直接採用美國破產公司的水準會更不容易觸發（更保守）。股價資料來自 FinMind、證交所與櫃買中心，每 3 小時更新一次，超過 3 天的資料不會拿來判斷。
+      </p>
+    </div>
+
     <!-- 產業類型調整表 -->
     <div class="card">
       <h3>🏢 不同企業型態的判斷標準</h3>
@@ -72,7 +129,7 @@
   <script src="js/ui.js"></script>
   <script src="js/app.js"></script>
   <script>
-    const TAB_LABELS = { income: '損益表', balance: '資產負債表', cashflow: '現金流量表' };
+    const TAB_LABELS = { income: '損益表', balance: '資產負債表', cashflow: '現金流量表', market: '股價' };
 
     function levelBadge(level) {
       if (level === 'red') return '<span class="badge red">紅燈 (警戒)</span>';
