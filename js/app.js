@@ -60,8 +60,31 @@ function writeWakeStartedAt(t) {
   try { t ? localStorage.setItem(WAKE_STARTED_KEY, String(t)) : localStorage.removeItem(WAKE_STARTED_KEY); } catch {}
 }
 
+// ---------- 等主機醒來 ----------
+// 主機睡眠時，請求會在主機醒來前就逾時失敗（喚醒常要 1 分鐘以上）。需要後端資料的功能先 await whenBackendReady()，
+// 主機確認醒著後才出發，逾時也從那時開始算。主機本來就醒著時幾乎不用等。
+let backendWait = null;
+function resetBackendWait() {
+  let resolve;
+  backendWait = { done: false, ok: false, promise: new Promise(r => { resolve = r; }) };
+  backendWait.resolve = resolve;
+}
+function resolveBackendWait(ok) {
+  if (!backendWait) resetBackendWait();
+  backendWait.done = true;
+  backendWait.ok = ok;
+  backendWait.resolve(ok);
+}
+function whenBackendReady() {
+  if (!backendWait) resetBackendWait();
+  return backendWait.promise;
+}
+function isBackendReady() { return !!(backendWait && backendWait.done && backendWait.ok); }
+
 function checkBackendAwake() {
   if (backendCheckRunning) return;
+  // 重新檢查（例如分頁離開很久後回來、點主機狀態）：之後的請求要等這次的結果
+  if (backendWait && backendWait.done) resetBackendWait();
   backendCheckRunning = true;
   // 切換頁面時，上一頁的計時會隨頁面一起消失，但 Render 的開機並不會中斷。
   // 若上一頁已在喚醒中，沿用當時的開始時間繼續計時，並立刻顯示提示。
@@ -115,6 +138,9 @@ function checkBackendAwake() {
     } else {
       setServerStatus('offline', '無法連線', networkErrorReason());
     }
+    // 通知在等主機的請求（股價等）可以出發了；連不上時也放行，讓它們顯示錯誤而不是一直等
+    resolveBackendWait(ok);
+    if (ok) window.dispatchEvent(new CustomEvent('backendready', { detail: { wokeUp: !!banner } }));
     if (ok) autoSyncStale();
     if (ok) syncMarketRisk();
     if (ok) {
@@ -267,6 +293,7 @@ let marketRiskSyncing = false;
 
 // 取得一批股票的股價規則資料並存起來；回傳 { risk } 或丟出錯誤（訊息給使用者看）
 async function fetchMarketRisk(ids, timeoutMs = 90000) {
+  await whenBackendReady(); // 主機醒來後才出發，逾時從這裡開始算
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {

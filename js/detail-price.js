@@ -31,17 +31,24 @@ async function loadPriceFundamentals(stockId, analysis) {
   if (DPF.cache[stockId]) { dpfRender(stockId, analysis, DPF.cache[stockId]); return; }
 
   if (DPF.controller) DPF.controller.abort();
-  DPF.controller = new AbortController();
-  const timer = setTimeout(() => DPF.controller.abort(), 90000);
-  body.innerHTML = '<p style="color:var(--text-light);">股價資料載入中…（第一次查詢這檔需要幾秒）</p>';
+  const controller = DPF.controller = new AbortController();
+  const waiting = typeof isBackendReady === 'function' && !isBackendReady();
+  body.innerHTML = `<p style="color:var(--text-light);">${waiting ? '等待主機喚醒（約 1 分鐘），醒來後會自動載入股價資料…' : '股價資料載入中…（第一次查詢這檔需要幾秒）'}</p>`;
+  if (typeof whenBackendReady === 'function') await whenBackendReady(); // 主機醒來後才出發，逾時從這裡開始算
+  if (controller.signal.aborted || DPF.currentId !== stockId) return;   // 等待期間換了別檔
+  if (waiting) body.innerHTML = '<p style="color:var(--text-light);">股價資料載入中…（第一次查詢這檔需要幾秒）</p>';
+  const timer = setTimeout(() => controller.abort(), 90000);
   try {
-    const res = await fetch(`${API_BASE}/api/prices/valuation/${encodeURIComponent(stockId)}`, { signal: DPF.controller.signal });
+    const res = await fetch(`${API_BASE}/api/prices/valuation/${encodeURIComponent(stockId)}`, { signal: controller.signal });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(httpErrorReason(res.status, data));
     DPF.cache[stockId] = data;
-    if (DPF.currentId === stockId) dpfRender(stockId, analysis, data);
+    if (DPF.failed === stockId) DPF.failed = null;
+    if (DPF.currentId === stockId) dpfRender(stockId, window.currentAnalysis || analysis, data);
   } catch (err) {
-    if (DPF.currentId !== stockId) return;
+    // 換了別檔，或同一檔重畫時取消了舊請求：不顯示錯誤（新的請求會接手）
+    if (DPF.currentId !== stockId || controller !== DPF.controller) return;
+    DPF.failed = stockId; // 主機醒來時（backendready）會自動重抓
     const reason = err.name === 'AbortError' ? '連線逾時，主機可能正在喚醒' : fetchErrorReason(err);
     body.innerHTML = `<p style="color:var(--text-light);">股價資料無法取得：${escapeHtml(reason)}
       <button class="btn-outline" style="margin-left:8px;" onclick="delete DPF.cache['${stockId}']; loadPriceFundamentals('${stockId}', window.currentAnalysis)">重試</button></p>`;
@@ -266,6 +273,15 @@ function dpfRender(stockId, analysis, data) {
 }
 
 // 切換主題、更改公司類型等重畫個股頁時，股價規則結果可能改變：用快取直接重畫，不重抓
+// 主機（重新）醒來後：補抓先前失敗的股價資料
+window.addEventListener('backendready', () => {
+  const id = DPF.currentId;
+  if (!id) return;
+  const state = DPF.riskState[id];
+  if (state && state.error) dpfEnsureRisk(id, true);
+  if (DPF.failed === id && window.currentAnalysis) loadPriceFundamentals(id, window.currentAnalysis);
+});
+
 window.addEventListener('themechange', () => {
   if (DPF.currentId && DPF.cache[DPF.currentId] && window.currentAnalysis) dpfRender(DPF.currentId, window.currentAnalysis, DPF.cache[DPF.currentId]);
 });

@@ -72,6 +72,7 @@ function pxTimeKey(t) {
 }
 
 async function pxGetJson(path, timeoutMs = 30000) {
+  if (typeof whenBackendReady === 'function') await whenBackendReady(); // 主機醒來後才出發（見 app.js）
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -155,6 +156,17 @@ function initPrices() {
     const waited = (Date.now() - PX.lastFetchAt) / 1000;
     if (waited >= PX.nextDelay) pxFetchLive();
     else PX.timer = setTimeout(pxFetchLive, (PX.nextDelay - waited) * 1000);
+  });
+  // 主機（重新）醒來後：補抓先前失敗的資料
+  window.addEventListener('backendready', () => {
+    // 只補失敗的；正在等主機、還在路上的請求不重複發
+    if (PX.liveError && !PX.fetching) pxFetchLive();
+    const failed = Object.keys(PX.summary).filter(id => PX.summary[id] && PX.summary[id].error);
+    if (failed.length) {
+      failed.forEach(id => delete PX.summary[id]);
+      pxFetchSummary();
+    }
+    if (PX.selected && !PX.history[PX.selected] && !PX.historyPending[PX.selected]) pxSelect(PX.selected, false);
   });
   window.addEventListener('themechange', () => {
     pxRebuildMainChart();
@@ -292,7 +304,8 @@ function pxSetSort(v) {
 function pxRenderStatus() {
   const el = document.getElementById('px-status');
   const st = PX.status;
-  let state = 'loading', text = '股價載入中…';
+  const waiting = typeof isBackendReady === 'function' && !isBackendReady();
+  let state = 'loading', text = waiting ? '等待主機喚醒（約 1 分鐘），醒來後會自動載入股價…' : '股價載入中…';
   if (!pxQuoteIds().length) {
     state = 'closed'; text = '沒有自選股，可以用上方的查詢框看任一檔股票';
   } else if (PX.liveError && !st) {
@@ -477,7 +490,10 @@ async function pxSelect(id, scroll = true) {
     if (typeof scrollToWithOffset === 'function') scrollToWithOffset(card); else card.scrollIntoView({ behavior: 'smooth' });
   }
 
-  if (!PX.history[id]) pxShowMsg('px-chart-msg', 'K 線資料載入中…（第一次查詢這檔需要幾秒）');
+  if (!PX.history[id]) {
+    const waiting = typeof isBackendReady === 'function' && !isBackendReady();
+    pxShowMsg('px-chart-msg', waiting ? '等待主機喚醒（約 1 分鐘），醒來後會自動載入 K 線…' : 'K 線資料載入中…（第一次查詢這檔需要幾秒）');
+  }
   try {
     await pxLoadHistory(id);
     if (PX.selected !== id) return;
