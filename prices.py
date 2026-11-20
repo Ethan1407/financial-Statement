@@ -390,6 +390,53 @@ class PriceService:
             result["ddNote"] = "尚未取得資產負債表（先查詢這檔的財報）"
         return result
 
+    def get_valuation_rows(self, sid):
+        """近 5 年每日本益比、股價淨值比、殖利率；存在 raw_finmind（PriceValuation），之後每天只補新資料"""
+        with self.locks.get(f"val:{sid}"):
+            entry = self.history_cache.get(f"val:{sid}")
+            if entry is None:
+                entry = {"rows": [], "at": None}
+                if self.supabase:
+                    try:
+                        res = self.supabase.table("raw_finmind").select("payload, fetched_at").eq("stock_id", sid) \
+                            .eq("dataset", VALUATION_DS).execute()
+                        if res.data:
+                            entry = {"rows": (res.data[0]["payload"] or {}).get("rows") or [], "at": res.data[0]["fetched_at"]}
+                    except Exception as e:
+                        print(f"[{sid}] 估值資料讀取失敗: {type(e).__name__}")
+            rows = entry["rows"]
+            last = rows[-1][0] if rows else None
+            age = (datetime.now(timezone.utc) - safe_parse_iso(entry["at"])).total_seconds() if entry["at"] else None
+            if (last is None or last < expected_latest_date()) and (age is None or age > REFETCH_MIN_INTERVAL or not rows):
+                start = last or (tw_now().date() - timedelta(days=365 * VALUATION_YEARS + 10)).isoformat()
+                data, err = self.fetch_finmind("TaiwanStockPER", sid, start)
+                if data is not None:
+                    merged = {r[0]: r for r in rows}
+                    for d in data:
+                        merged[d["date"]] = [d["date"], d.get("PER"), d.get("PBR"), d.get("dividend_yield")]
+                    cutoff = (tw_now().date() - timedelta(days=365 * VALUATION_YEARS)).isoformat()
+                    rows = [merged[k] for k in sorted(merged) if k >= cutoff]
+                    entry = {"rows": rows, "at": get_iso_now()}
+                    if rows:
+                        self._write_db(sid, VALUATION_DS, {"rows": rows})
+                elif not rows:
+                    return None, f"估值資料取得失敗（{err}）"
+            self.history_cache.set(f"val:{sid}", entry)
+            return entry["rows"], None
+
+    def get_valuation(self, sid):
+        rows, err = self.get_valuation_rows(sid)
+        entry, err2, _ = self.get_history(sid, with_events=True)
+        bench, _, _ = self.get_history(BENCHMARK_ID, with_events=True)
+        adj = adjust_rows(entry["rows"], entry["events"] or []) if entry else None
+        bench_adj = adjust_rows(bench["rows"], bench["events"] or []) if bench else None
+        return {
+            "id": sid,
+            "valuation": valuation_stats(rows) if rows else None, "valuationError": err,
+            "momentum": momentum_stats(adj, bench_adj) if adj else None, "priceError": err2,
+            "benchmark": BENCHMARK_ID,
+        }
+
     def get_summary(self, sid):
         entry, err, _ = self.get_history(sid, with_events=True)
         if not entry:
@@ -524,6 +571,73 @@ def calc_naive_dd(raw_close_rows, adj_rows, balance_raw):
     }
 
 
+# ================= 估值與動能（個股詳情「股價與基本面」區塊） =================
+# 估值：證交所每日公布的本益比、股價淨值比、殖利率（FinMind TaiwanStockPER），和公司自己近 5 年比較
+#       （CFA Institute 估值教材：倍數可與同業或公司自己的歷史中位數比較）
+# 動能：過去 12 個月扣掉最近 1 個月的報酬（Jegadeesh & Titman 1993 以來的慣例），離 52 週高點的距離（George & Hwang 2004）
+VALUATION_DS = "PriceValuation"
+VALUATION_YEARS = 5
+
+
+def _percentile_of(values, current):
+    """current 在歷史中的位置：有多少比例的日子比現在低（0～100）"""
+    if not values or current is None:
+        return None
+    below = sum(1 for v in values if v < current)
+    return round(below / len(values) * 100)
+
+
+def _median(values):
+    s = sorted(values)
+    n = len(s)
+    if not n:
+        return None
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def valuation_stats(rows):
+    """rows: [[日期, 本益比, 股價淨值比, 殖利率]]；本益比 0 代表虧損（證交所不計算），不列入分布"""
+    if not rows:
+        return None
+    latest = rows[-1]
+    out = {"date": latest[0]}
+    for idx, key, valid in ((1, "per", lambda v: v and v > 0), (2, "pbr", lambda v: v and v > 0), (3, "yield", lambda v: v is not None and v >= 0)):
+        hist = [r[idx] for r in rows if valid(r[idx])]
+        cur = latest[idx] if valid(latest[idx]) else None
+        out[key] = {
+            "current": cur, "median": round(_median(hist), 2) if hist else None,
+            "percentile": _percentile_of(hist, cur), "days": len(hist),
+            "min": min(hist) if hist else None, "max": max(hist) if hist else None,
+        }
+    return out
+
+
+def momentum_stats(adj, bench_adj):
+    """adj：還原權息日 K。回傳 12-1 動能、近 12 月報酬、離 52 週高點、近 1 年最大回撤（與 0050 比較）"""
+    def ret(rows, back, skip=0):
+        if len(rows) <= back:
+            return None
+        a, b = rows[-(back + 1)][4], rows[-(skip + 1)][4]
+        return b / a - 1 if a else None
+
+    def stats(rows):
+        if not rows or len(rows) < YEAR_DAYS + 1:
+            return None
+        last_year = rows[-YEAR_DAYS:]
+        high = max(r[2] for r in last_year)
+        peak, mdd = -1, 0
+        for r in last_year:
+            peak = max(peak, r[4])
+            mdd = min(mdd, r[4] / peak - 1)
+        return {
+            "mom12_1": ret(rows, YEAR_DAYS, MONTH_DAYS), "ret12": ret(rows, YEAR_DAYS),
+            "fromHigh52": rows[-1][4] / high - 1 if high else None, "maxDrawdown1y": mdd,
+        }
+
+    r = lambda d: {k: (round(v, 4) if isinstance(v, float) else v) for k, v in d.items()} if d else None
+    return {"stock": r(stats(adj)), "benchmark": r(stats(bench_adj)) if bench_adj else None}
+
+
 def adjust_rows(rows, events):
     """events 日期以前的價格乘上係數（由新往舊累乘）；成交量不調整"""
     if not events:
@@ -582,6 +696,14 @@ def register_prices(app, supabase, fetch_finmind, get_price_map):
         with ThreadPoolExecutor(max_workers=SUMMARY_WORKERS) as ex:
             results = dict(zip(ids, ex.map(service.get_summary, ids)))
         return jsonify({"summary": results})
+
+    @bp.route("/api/prices/valuation/<stock_id>", methods=["GET"])
+    def api_prices_valuation(stock_id):
+        """個股詳情「股價與基本面」：本益比／股價淨值比／殖利率與近 5 年比較、動能、52 週高點、最大回撤"""
+        sid = stock_id.strip().upper()
+        if not ID_RE.match(sid):
+            return jsonify({"error": "股票代號格式錯誤"}), 400
+        return jsonify(service.get_valuation(sid))
 
     @bp.route("/api/prices/risk", methods=["GET"])
     def api_prices_risk():

@@ -90,3 +90,46 @@
   .px-chart-title .px-big { font-size: 1.35rem; }
   .px-legend { height: 3.4em; } /* 手機寬度不夠，開高低收固定佔兩行 */
 }
+
+/* ================= 個股詳情：股價與基本面（js/detail-price.js） ================= */
+.pf-more { font-size: 0.9rem; font-weight: bold; white-space: nowrap; }
+.pf-h { margin: 18px 0 8px; font-size: 0.98rem; }
+.pf-table { min-width: 0; font-size: 0.9rem; }
+.pf-table th, .pf-table td { padding: 8px; vertical-align: middle; }
+.pf-table td.num, .pf-table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pf-bar { position: relative; display: inline-block; width: 90px; height: 6px; margin-right: 8px; vertical-align: middle; border-radius: 3px;
+  background: linear-gradient(to right, var(--green), var(--yellow), var(--red)); opacity: 0.85; }
+.pf-bar span { position: absolute; top: 50%; width: 11px; height: 11px; border-radius: 50%; background: var(--card-bg); border: 2px solid var(--text); transform: translate(-50%, -50%); }
+.pf-good { color: var(--green); font-weight: 600; }
+.pf-bad { color: var(--red); font-weight: 600; }
+.pf-mid { color: var(--yellow); font-weight: 600; }
+.pf-muted { color: var(--text-light); font-size: 0.85rem; }
+#pf-body p { line-height: 1.7; font-size: 0.92rem; margin-top: 6px; }
+.pf-list { margin: 0; padding-left: 20px; line-height: 1.9; font-size: 0.92rem; }
+.pf-rules { list-style: none; padding-left: 0; }
+.pf-verdict { background: var(--bg); border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: 6px; padding: 12px; line-height: 1.7; font-size: 0.93rem; }
+.pf-foot { margin-top: 16px; padding-top: 12px; border-top: 1px dashed var(--border); font-size: 0.8rem; color: var(--text-light); line-height: 1.6; }
+@media (max-width: 640px) {
+  .pf-table th:nth-child(3), .pf-table td:nth-child(3) { display: none; } /* 手機隱藏中位數欄，位置條已表示 */
+}
+/* 股價規則：一列一條規則，結果放最左邊方便掃讀 */
+.pf-risk-table { min-width: 0; font-size: 0.9rem; }
+.pf-risk-table th, .pf-risk-table td { padding: 9px 10px; vertical-align: middle; }
+.pf-risk-table th { white-space: nowrap; }
+.pf-risk-status { width: 1%; white-space: nowrap; }
+.pf-risk-name { font-weight: 600; white-space: nowrap; }
+.pf-risk-th { color: var(--text-light); font-size: 0.82rem; white-space: nowrap; }
+.pf-risk-th-m { display: none; margin-top: 2px; color: var(--text-light); font-size: 0.78rem; }
+.pf-chip { display: inline-block; min-width: 4.5em; text-align: center; font-size: 0.75rem; font-weight: bold; padding: 3px 8px; border-radius: 10px; white-space: nowrap; }
+.pf-chip.ok { color: var(--green); background: rgba(16, 185, 129, 0.12); }
+.pf-chip.warn { color: #b45309; background: rgba(245, 158, 11, 0.18); }
+.pf-chip.bad { color: #fff; background: var(--red); }
+.pf-chip.na { color: var(--text-light); background: rgba(156, 163, 175, 0.15); }
+[data-theme="dark"] .pf-chip.warn { color: var(--yellow); }
+@media (max-width: 640px) {
+  /* 手機：門檻改放在數值下方，規則名稱可換行，不用左右滑動 */
+  .pf-risk-table th.pf-risk-th, .pf-risk-table td.pf-risk-th { display: none; }
+  .pf-risk-th-m { display: block; }
+  .pf-risk-name { white-space: normal; }
+  .pf-risk-table th, .pf-risk-table td { padding: 8px 6px; }
+}

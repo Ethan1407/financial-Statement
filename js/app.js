@@ -262,33 +262,58 @@ async function autoSyncStale() {
 // 向 /api/prices/risk 取得官方注意／處置／變更交易名單、波動度、超額報酬、違約距離，存在 localStorage（market_risk）。
 // 每 3 小時最多更新一次；拿到後重畫目前頁面，燈號與風險分數會納入股價規則。
 const MARKET_RISK_REFRESH_MS = 3 * 3600 * 1000;
+const MARKET_RISK_BATCH = 10;          // 每次向後端要 10 檔：第一次每檔都要抓日 K，一次要太多容易逾時
 let marketRiskSyncing = false;
+
+// 取得一批股票的股價規則資料並存起來；回傳 { risk } 或丟出錯誤（訊息給使用者看）
+async function fetchMarketRisk(ids, timeoutMs = 90000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${API_BASE}/api/prices/risk?ids=${ids.join(',')}`, { signal: controller.signal });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(httpErrorReason(res.status, body));
+    saveMarketRisk(body.risk || {});
+    return body;
+  } catch (err) {
+    throw new Error(err.name === 'AbortError' ? '連線逾時，主機可能正在喚醒' : fetchErrorReason(err));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function refreshDetailIfShown(ids) {
+  const content = document.getElementById('detail-content');
+  if (content && content.style.display !== 'none' && window.currentStockId && ids.includes(window.currentStockId)) {
+    loadDetailView(window.currentStockId, true); // 重畫燈號與「股價與基本面」區塊（不重抓新聞）
+  }
+}
+
 async function syncMarketRisk(force = false) {
   if (marketRiskSyncing) return;
   const db = loadStockDatabase();
-  const ids = [...new Set([...portfolio, ...Object.keys(db)])]
-    .filter(id => /^[0-9]{4,6}$/.test(id) && !isEtfId(id) && db[id] && !db[id].isEtf).slice(0, 60);
+  const valid = id => /^[0-9]{4,6}$/.test(id) && !isEtfId(id) && db[id] && !db[id].isEtf;
+  // 目前正在看的股票優先，再來是自選股，最後是其他查過的
+  const ids = [...new Set([window.currentStockId, ...portfolio, ...Object.keys(db)].filter(Boolean))].filter(valid).slice(0, 60);
   if (!ids.length) return;
-  let store = {};
-  try { store = JSON.parse(localStorage.getItem(MARKET_RISK_KEY)) || {}; } catch {}
-  const data = store.data || {};
+  const known = loadMarketRisk();
   const now = Date.now();
-  const stale = ids.filter(id => force || !data[id] || now - data[id].fetchedAt > MARKET_RISK_REFRESH_MS);
+  const stale = ids.filter(id => force || !known[id] || now - known[id].fetchedAt > MARKET_RISK_REFRESH_MS);
   if (!stale.length) return;
   marketRiskSyncing = true;
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 120000);
-    const res = await fetch(`${API_BASE}/api/prices/risk?ids=${stale.join(',')}`, { signal: controller.signal }).finally(() => clearTimeout(timer));
-    if (!res.ok) return;
-    const body = await res.json();
-    Object.entries(body.risk || {}).forEach(([id, v]) => { if (v && !v.error) data[id] = { ...v, fetchedAt: now }; });
-    // 只保留還在瀏覽器裡的股票
-    Object.keys(data).forEach(id => { if (!db[id]) delete data[id]; });
-    try { localStorage.setItem(MARKET_RISK_KEY, JSON.stringify({ data })); } catch {}
-    rerenderCurrentPage();
-  } catch (err) {
-    // 取不到股價資料時，燈號只用財報判斷（股價規則列為「資料不足」）
+    for (let i = 0; i < stale.length; i += MARKET_RISK_BATCH) {
+      const batch = stale.slice(i, i + MARKET_RISK_BATCH);
+      try {
+        await fetchMarketRisk(batch);
+      } catch (err) {
+        console.warn(`股價規則資料取得失敗（${batch.join(',')}）：${err.message}`);
+        break; // 主機有問題時不再連續打，下次開頁面再試
+      }
+      rerenderCurrentPage();
+      refreshDetailIfShown(batch);
+    }
+    saveMarketRisk({}, new Set(Object.keys(loadStockDatabase()))); // 只保留還在瀏覽器裡的股票
   } finally {
     marketRiskSyncing = false;
   }
@@ -1374,6 +1399,7 @@ function loadDetailView(stockId, skipNews = false) {
   });
 
   renderOfficialLinks(stockId);
+  if (typeof loadPriceFundamentals === 'function') loadPriceFundamentals(stockId, analysis); // 股價與基本面（js/detail-price.js）
   setTimeout(() => renderCharts(stockId, analysis.alerts), 0);
   loadMonthly(stockId);
 

@@ -7,6 +7,7 @@
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/prices.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script defer src="/_vercel/insights/script.js"></script>
 </head>
@@ -54,6 +55,7 @@
         <p class="page-toc-title">本頁區塊</p>
         <ul>
           <li><a href="#overview-card" data-key="overview-card">📊 總覽與風險趨勢</a></li>
+          <li><a href="#price-card" data-key="price-card">💹 股價與基本面</a></li>
           <li><a href="#news-card" data-key="news-card">📰 相關新聞</a></li>
           <li><a href="#links-card" data-key="links-card">🔗 官方資料連結</a></li>
           <li><a href="#conf-card" data-key="conf-card">🎤 法人說明會</a></li>
@@ -100,6 +102,16 @@
         </div>
 
         <div id="detail-alerts-summary" style="margin-top: 12px; font-size: 0.9rem;"></div>
+      </div>
+
+      <!-- ================= 股價與基本面（js/detail-price.js） ================= -->
+      <div class="card" id="price-card" style="margin-bottom: 16px;">
+        <div class="flex-between" style="margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
+          <h3 style="margin: 0;">💹 股價與基本面</h3>
+          <a id="pf-more" class="pf-more" href="prices.html">查看完整 K 線與股價資料 →</a>
+        </div>
+        <div id="pf-body"><p style="color:var(--text-light);">股價資料載入中…</p></div>
+        <p class="pf-foot" id="pf-foot"></p>
       </div>
 
       <!-- ================= 相關新聞區塊 ================= -->
@@ -251,6 +263,7 @@
   <script src="js/app.js"></script>
   <script src="js/etf.js"></script>
   <script src="js/recommend.js"></script>
+  <script src="js/detail-price.js"></script>
   <script> initDetails(); </script>
 </body>
 </html>

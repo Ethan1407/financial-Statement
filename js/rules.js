@@ -384,17 +384,34 @@ const RULES_CONFIG = {
 const MARKET_RISK_KEY = 'market_risk';
 const MARKET_RISK_MAX_AGE_MS = 3 * 86400 * 1000; // 超過 3 天的股價資料不拿來判斷，避免用過期的名單
 
+// 記憶體備份：瀏覽器儲存空間滿了寫不進 localStorage 時，這次瀏覽仍然可以使用
+const MARKET_RISK_MEM = {};
+
+function readMarketRiskStore() {
+    try { return (JSON.parse(localStorage.getItem(MARKET_RISK_KEY)) || {}).data || {}; } catch (err) { return {}; }
+}
+
 function loadMarketRisk() {
+    const now = Date.now();
+    const out = {};
+    Object.entries({ ...readMarketRiskStore(), ...MARKET_RISK_MEM }).forEach(([id, v]) => {
+        if (v && v.fetchedAt && now - v.fetchedAt < MARKET_RISK_MAX_AGE_MS) out[id] = v;
+    });
+    return out;
+}
+
+// entries: { 代號: 後端 /api/prices/risk 的結果 }；keepIds：還在瀏覽器裡的股票（其餘清掉），不給就不清
+function saveMarketRisk(entries, keepIds) {
+    const data = readMarketRiskStore();
+    const now = Date.now();
+    Object.entries(entries).forEach(([id, v]) => {
+        if (v && !v.error) { data[id] = { ...v, fetchedAt: now }; MARKET_RISK_MEM[id] = data[id]; }
+    });
+    if (keepIds) Object.keys(data).forEach(id => { if (!keepIds.has(id)) delete data[id]; });
     try {
-        const store = JSON.parse(localStorage.getItem(MARKET_RISK_KEY)) || {};
-        const now = Date.now();
-        const out = {};
-        Object.entries(store.data || {}).forEach(([id, v]) => {
-            if (v && v.fetchedAt && now - v.fetchedAt < MARKET_RISK_MAX_AGE_MS) out[id] = v;
-        });
-        return out;
+        localStorage.setItem(MARKET_RISK_KEY, JSON.stringify({ data }));
     } catch (err) {
-        return {};
+        console.warn('股價規則資料無法寫入瀏覽器儲存空間（可能已滿），本次瀏覽改用記憶體', err);
     }
 }
 
