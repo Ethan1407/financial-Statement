@@ -55,9 +55,11 @@
         <p class="page-toc-title">本頁區塊</p>
         <ul>
           <li><a href="#overview-card" data-key="overview-card">📊 總覽與風險趨勢</a></li>
+          <li><a href="#industry-card" data-key="industry-card">🏭 產業與同業比較</a></li>
           <li><a href="#price-card" data-key="price-card">💹 股價與基本面</a></li>
           <li><a href="#news-card" data-key="news-card">📰 相關新聞</a></li>
           <li><a href="#links-card" data-key="links-card">🔗 官方資料連結</a></li>
+          <li><a href="#leading-card" data-key="leading-card">🧭 領先指標與驗證</a></li>
           <li><a href="#conf-card" data-key="conf-card">🎤 法人說明會</a></li>
           <li><a href="#peers-card" data-key="peers-card">🔍 同類型公司</a></li>
           <li><a href="#radar-card" data-key="radar-card">🕸️ 健康度雷達圖</a></li>
@@ -102,6 +104,13 @@
         </div>
 
         <div id="detail-alerts-summary" style="margin-top: 12px; font-size: 0.9rem;"></div>
+      </div>
+
+      <!-- ================= 產業關鍵指標與同業比較（js/detail-insights.js） ================= -->
+      <div class="card" id="industry-card" style="margin-bottom: 16px;">
+        <h3 style="margin: 0 0 12px 0;">🏭 產業關鍵指標與同業比較</h3>
+        <div id="industry-body"><p style="color:var(--text-light);">同業比較載入中…</p></div>
+        <p class="pf-foot" id="industry-foot"></p>
       </div>
 
       <!-- ================= 股價與基本面（js/detail-price.js） ================= -->
@@ -156,6 +165,14 @@
           <span style="font-size: 0.85rem; color: var(--text-light);">連到證交所、公開資訊觀測站官方頁面</span>
         </div>
         <div id="official-links" class="link-grid"></div>
+      </div>
+
+      <!-- ================= 領先指標與驗證（js/detail-insights.js） ================= -->
+      <div class="card" id="leading-card" style="margin-bottom: 16px;">
+        <h3 style="margin: 0 0 4px 0; display:flex; align-items:center; gap:8px; flex-wrap: wrap;">🧭 領先指標與驗證 <span class="data-tag leading">領先指標</span></h3>
+        <p class="section-hint">從月營收、合約負債、存貨、資本支出找出比季報更早出現的變化，並用之後公布的財報驗證準不準。</p>
+        <div id="leading-body"><p style="color:var(--text-light);">領先指標載入中…</p></div>
+        <p class="pf-foot" id="leading-foot"></p>
       </div>
 
       <!-- 法人說明會（領先指標）：只整理日期與連結，不對內容評分 -->
@@ -264,6 +281,7 @@
   <script src="js/etf.js"></script>
   <script src="js/recommend.js"></script>
   <script src="js/detail-price.js"></script>
+  <script src="js/detail-insights.js"></script>
   <script> initDetails(); </script>
 </body>
 </html>

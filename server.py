@@ -51,7 +51,7 @@ else:
     print("⚠️ 提示：未偵測到 Supabase 設定，系統將以純記憶體模式運作。")
 
 # ================= 系統常數與全域變數 =================
-CALC_VERSION = 4
+CALC_VERSION = 5  # 5：新增合約負債、資本支出、存貨金額（領先指標與產業指標使用）
 START_DATE = "2019-01-01"
 
 # 個股代號；00 開頭為 ETF，沒有財報，改由 /api/etf 處理
@@ -62,7 +62,7 @@ MANUAL_CHECK_INTERVAL = 600
 
 RATE_LIMIT = 30
 RATE_WINDOW = 60
-RATE_LIMITED_PREFIXES = ('/api/stock', '/api/monthly', '/api/news', '/api/etf', '/api/quotes', '/api/conferences', '/api/recommend', '/api/prices')
+RATE_LIMITED_PREFIXES = ('/api/stock', '/api/monthly', '/api/news', '/api/etf', '/api/quotes', '/api/conferences', '/api/recommend', '/api/prices', '/api/industry', '/api/leading')
 
 try:
     TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", 1))
@@ -441,6 +441,10 @@ def compute_financials_from_raw(stock_id, raw_dict):
         ar = scale_val(get_val(bs_row, ["AccountsReceivableNet", "AccountsReceivable", "應收帳款淨額", "應收帳款", "應收款項淨額"]))
         raw_inv = get_val(bs_row, ["Inventories", "Inventory", "存貨", "存貨淨額"])
         inv = scale_val(raw_inv)
+        # 合約負債（預收客戶款項，營建、設備業的訂單能見度）：流動 + 非流動
+        cl_cur = get_val(bs_row, ["CurrentContractLiabilities", "ContractLiabilitiesCurrent", "合約負債－流動", "合約負債-流動"])
+        cl_non = get_val(bs_row, ["NoncurrentContractLiabilities", "ContractLiabilitiesNoncurrent", "合約負債－非流動", "合約負債-非流動"])
+        contract_liab = scale_val(cl_cur + (cl_non or 0)) if cl_cur is not None else scale_val(cl_non)
         cash_end = scale_val(get_val(merged_row, ["CashBalancesEndOfPeriod", "期末現金及約當現金餘額", "期末現金及約當現金", "CashAndCashEquivalents", "現金及約當現金"]))
 
         op_cf_keys = ["NetCashFlowsFromOperatingActivities", "NetCashInflowFromOperatingActivities", "CashFlowsFromOperatingActivities", "營業活動之淨現金流入", "營業活動之淨現金流入(流出)", "營業活動之現金流量－淨額"]
@@ -469,6 +473,7 @@ def compute_financials_from_raw(stock_id, raw_dict):
         
         if is_financial:
             grossMargin = currentRatio = arDays = invDays = free_cf = quickRatio = interestCoverage = None
+            contract_liab = capex = inv = None
             interestStatus = "n/a"
         else:
             if "income" not in missing and "cashflow" not in missing:
@@ -496,7 +501,9 @@ def compute_financials_from_raw(stock_id, raw_dict):
             "nonOperatingIncome": safe_round(non_operating_income, 0), "netIncome": safe_round(net_income, 0), "eps": safe_round(eps, 2),
             "interestCoverage": safe_round(interestCoverage, 2), "debtRatio": safe_round(debtRatio, 2), "currentRatio": safe_round(currentRatio, 2),
             "quickRatio": safe_round(quickRatio, 2), "arDays": safe_round(arDays, 0), "invDays": safe_round(invDays, 0),
-            "operatingCF": safe_round(operating_cf, 0), "financingCF": safe_round(financing_cf, 0), "freeCF": safe_round(free_cf, 0), "cashEnd": safe_round(cash_end, 0)
+            "operatingCF": safe_round(operating_cf, 0), "financingCF": safe_round(financing_cf, 0), "freeCF": safe_round(free_cf, 0), "cashEnd": safe_round(cash_end, 0),
+            "contractLiabilities": safe_round(contract_liab, 0), "capex": safe_round(abs(capex), 0) if capex is not None else None,
+            "inventory": safe_round(inv, 0)
         })
 
     op_cfs = [abs(q['operatingCF']) for q in quarters_data if q['operatingCF'] is not None]
@@ -1306,7 +1313,8 @@ from news import register_news
 from etf import register_etf
 from quotes import register_quotes, get_price_map
 from mops import register_mops
-from recommend import register_recommend
+from recommend import register_recommend, normalize_industry
+from insights import register_insights
 from prices import register_prices
 register_news(app, supabase=supabase)
 register_etf(app, supabase=supabase, get_holding_details=get_holding_details, get_price_map=get_price_map)
@@ -1348,6 +1356,28 @@ def prefetch_financials(stock_id):
 
 recommender = register_recommend(app, supabase=supabase, get_industry_map=get_industry_map, get_price_map=get_price_map,
                                  prefetch_fn=prefetch_financials)
+
+def get_financials_cached(stock_id):
+    """產業比較與領先指標用：先看記憶體快取，沒有才走一般流程（不替新股票完整抓取）"""
+    cached = memory_cache.get(f"{stock_id}_v{CALC_VERSION}")
+    if cached:
+        return cached, None, 200
+    result, err, code = process_financials(stock_id, allow_full=False)
+    if result:
+        memory_cache.set(f"{stock_id}_v{CALC_VERSION}", result)
+    return result, err, code
+
+def get_monthly_cached(stock_id):
+    cached = monthly_memory_cache.get(f"{stock_id}_monthly")
+    if cached:
+        return cached, None, 200
+    result, err, code = process_monthly(stock_id)
+    if result:
+        monthly_memory_cache.set(f"{stock_id}_monthly", result)
+    return result, err, code
+
+register_insights(app, supabase=supabase, recommender=recommender, get_financials=get_financials_cached,
+                  get_monthly=get_monthly_cached, normalize_industry=normalize_industry)
 
 if __name__ == '__main__':
     is_debug = os.getenv("FLASK_DEBUG", "False").lower() == "true"

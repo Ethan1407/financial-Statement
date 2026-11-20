@@ -1427,6 +1427,7 @@ function loadDetailView(stockId, skipNews = false) {
 
   renderOfficialLinks(stockId);
   if (typeof loadPriceFundamentals === 'function') loadPriceFundamentals(stockId, analysis); // 股價與基本面（js/detail-price.js）
+  if (typeof loadInsights === 'function') loadInsights(stockId, analysis); // 產業比較、領先指標（js/detail-insights.js）
   setTimeout(() => renderCharts(stockId, analysis.alerts), 0);
   loadMonthly(stockId);
 

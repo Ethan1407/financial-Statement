@@ -133,3 +133,20 @@
   .pf-risk-name { white-space: normal; }
   .pf-risk-table th, .pf-risk-table td { padding: 8px 6px; }
 }
+
+/* ---------- 個股詳情：產業比較、領先指標（js/detail-insights.js） ---------- */
+.din-focus { background: var(--bg); border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: 6px; padding: 10px 12px; line-height: 1.7; font-size: 0.92rem; margin: 0 0 12px; }
+.din-table td { line-height: 1.5; }
+.din-details { margin-top: 10px; font-size: 0.88rem; }
+.din-details summary { cursor: pointer; color: var(--primary); }
+.din-signals { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.din-signal { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; font-size: 0.92rem; line-height: 1.6; }
+.din-signal-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.din-stat { margin-top: 4px; padding-top: 6px; border-top: 1px dashed var(--border); font-size: 0.86rem; line-height: 1.7; }
+.din-badge { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 1px 8px; border-radius: 10px; border: 1px solid currentColor; white-space: nowrap; }
+.din-pos { color: var(--green); }
+.din-neg { color: var(--yellow); }
+.din-log { margin: 0; padding-left: 20px; line-height: 1.9; font-size: 0.9rem; }
+@media (max-width: 640px) {
+  .din-best { display: none; } /* 手機隱藏「同業最佳」欄 */
+}
