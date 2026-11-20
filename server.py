@@ -1238,8 +1238,8 @@ def admin_recompute(stock_id):
                 "checked_at": now_str, "updated_at": now_str
             }).execute()
         except Exception as e:
-            pass
-        
+            log_db_write_error(stock_id, "monthly_results", e)
+
     return jsonify({"msg": "重算完成", "stock_id": stock_id})
 
 @app.route('/api/admin/recompute-all', methods=['POST'])
@@ -1309,7 +1309,7 @@ from mops import register_mops
 from recommend import register_recommend
 from prices import register_prices
 register_news(app, supabase=supabase)
-register_etf(app, supabase=supabase, get_holding_details=get_holding_details)
+register_etf(app, supabase=supabase, get_holding_details=get_holding_details, get_price_map=get_price_map)
 register_quotes(app, get_industry_map=get_industry_map)
 # 股價功能的 FinMind 呼叫：計入統計，並限制每小時最多 PRICE_FINMIND_HOURLY_CAP 次，
 # 保留至少一半的額度給財報查詢（免費帳號每小時 600 次，整個 Token 共用）

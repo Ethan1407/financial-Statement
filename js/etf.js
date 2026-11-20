@@ -222,7 +222,9 @@ async function renderEtfView(etfId) {
             // 詳情頁拿到最新成分股時，一併更新首頁卡片用的摘要，兩邊的「已查詢 x / 50 檔」才會一致
             if (loadStockDatabase()[etfId]) storeEtfResult(etfId, etfData);
         } else {
-            fetchError = '伺服器錯誤';
+            // 例如「國泰的 ETF 成分股目前不提供（目前支援：元大、群益、復華）」
+            const body = await res.json().catch(() => ({}));
+            fetchError = body.error || '伺服器錯誤';
         }
     } catch (e) {
         if (e.name !== 'AbortError') fetchError = '連線失敗';
@@ -245,7 +247,7 @@ async function renderEtfView(etfId) {
         } else {
             document.getElementById('etf-list-container').innerHTML = `
                 <div style="text-align:center; color:var(--text-light);">
-                    <p style="margin-bottom:12px;">資料暫時無法取得 (${fetchError})</p>
+                    <p style="margin-bottom:12px;">資料暫時無法取得（${escapeHtml(fetchError)}）</p>
                     <button class="btn-outline" onclick="renderEtfView('${etfId}')" style="min-height:40px; padding:0 24px;">重試</button>
                 </div>
             `;

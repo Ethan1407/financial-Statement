@@ -19,7 +19,7 @@
 </div>
 
 > [!WARNING]
-> 本專案資料來自公開資訊（FinMind、證交所、櫃買中心、MoneyDJ），依財報數據自動計算，可能有延遲或誤差。所有內容僅供參考，**不構成投資建議**。
+> 本專案資料來自公開資訊（FinMind、證交所、櫃買中心、各投信公告的 ETF 申購買回清單），依財報數據自動計算，可能有延遲或誤差。所有內容僅供參考，**不構成投資建議**。
 
 <!-- 截圖：建議放在 docs/screenshots/ 後取消註解
 <p align="center">
@@ -117,7 +117,7 @@ flowchart LR
 | 前端 | HTML、CSS、Vanilla JavaScript、[Chart.js](https://www.chartjs.org/)、[Lightweight Charts](https://github.com/tradingview/lightweight-charts)（K 線） |
 | 後端 | Python、Flask、Flask-CORS、Gunicorn |
 | 資料庫 | [Supabase](https://supabase.com/)（PostgreSQL） |
-| 資料來源 | [FinMind](https://finmindtrade.com/)、[證交所 OpenAPI](https://openapi.twse.com.tw/)、[櫃買中心 OpenAPI](https://www.tpex.org.tw/openapi/)、MoneyDJ、Google News／Bing News RSS |
+| 資料來源 | [FinMind](https://finmindtrade.com/)、[證交所 OpenAPI](https://openapi.twse.com.tw/)、[櫃買中心 OpenAPI](https://www.tpex.org.tw/openapi/)、各投信 ETF 申購買回清單、Google News／Bing News RSS |
 | 部署 | 前端 Vercel（含 Vercel Analytics），後端 Render |
 
 ---
@@ -128,7 +128,8 @@ flowchart LR
 Financial Statements/
 ├── server.py          # Flask 主程式：財報、月營收、管理員 API、限流與快取
 ├── news.py            # 個股新聞（Google / Bing RSS）與利多／利空判斷
-├── etf.py             # ETF 成分股（MoneyDJ）
+├── etf.py             # ETF 成分股 API（快取與資料庫）
+├── pcf.py             # ETF 成分股來源：各投信官網的申購買回清單／每日持股（元大、群益、復華）
 ├── quotes.py          # 上市櫃全市場收盤價（證交所、櫃買中心）
 ├── mops.py            # 法人說明會（公開資訊觀測站，每日整批同步）
 ├── recommend.py       # 同類型公司推薦與匿名回饋統計
@@ -358,7 +359,7 @@ curl -X POST -H "X-Admin-Key: $ADMIN_KEY" http://127.0.0.1:5000/api/admin/clear-
 
 - [FinMind](https://finmindtrade.com/)：台股財報、月營收與產業別資料
 - [臺灣證券交易所 OpenAPI](https://openapi.twse.com.tw/)、[證券櫃檯買賣中心 OpenAPI](https://www.tpex.org.tw/openapi/)：收盤價
-- [MoneyDJ](https://www.moneydj.com/)：ETF 成分股
+- 元大投信、群益投信、復華投信：ETF 申購買回清單與每日持股（法規要求的公開資訊）
 - [公開資訊觀測站](https://mopsov.twse.com.tw/mops/web/t100sb02_1)：法人說明會一覽表
 - [Chart.js](https://www.chartjs.org/)：圖表
 - [TradingView Lightweight Charts](https://github.com/tradingview/lightweight-charts)：K 線圖（Apache 2.0）

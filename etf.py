@@ -1,52 +1,18 @@
 import re
-import requests
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from common import get_iso_now, safe_parse_iso, TTLCache
+from pcf import fetch_holdings
 
 # ================= 模組層級全域變數 =================
 etf_memory_cache = TTLCache(ttl=600)
 
-# MoneyDJ「全部持股」頁面：涵蓋各家投信的台股 ETF（債券、期貨型 ETF 沒有股票成分）
-MONEYDJ_HOLDINGS_URL = "https://www.moneydj.com/ETF/X/Basic/Basic0007B.xdjhtm?etfid={etf_id}.TW"
-HTTP_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    "Accept-Language": "zh-TW,zh;q=0.9",
-}
-HOLDING_ROW_RE = re.compile(r'<td class="col05">\s*(?:<a[^>]*>)?([^<]+?)(?:</a>)?\s*</td>\s*<td class="col06">([\d.]+)</td>')
-STOCK_LABEL_RE = re.compile(r"^(.*)\((\d{4,6})\.TWO?\)$")  # 例：台積電(2330.TW)；期貨、現金不符合
-AS_OF_RE = re.compile(r"資料日期[:：]\s*(\d{4})/(\d{2})/(\d{2})")
-
 ETF_MAX_AGE = 86400            # 成分股每日公布，超過一天才重抓
 MANUAL_REFRESH_MAX_AGE = 3600  # 按「更新」時，超過一小時就重抓
 
-
-# ================= 輔助函式 =================
-def fetch_moneydj_holdings(etf_id):
-    """從 MoneyDJ 抓取 ETF 全部持股。回傳 (dict 或 None, 錯誤描述)"""
-    try:
-        resp = requests.get(MONEYDJ_HOLDINGS_URL.format(etf_id=etf_id), headers=HTTP_HEADERS, timeout=15)
-    except requests.RequestException as e:
-        return None, type(e).__name__
-    if resp.status_code != 200:
-        return None, f"HTTP {resp.status_code}"
-
-    resp.encoding = "utf-8"
-    html = resp.text
-    holdings = []
-    for label, weight in HOLDING_ROW_RE.findall(html):
-        m = STOCK_LABEL_RE.match(label.strip())
-        if m:
-            holdings.append({"stockId": m.group(2), "name": m.group(1).strip(), "weight": float(weight)})
-
-    title = re.search(r"<title>([^<]*)</title>", html)
-    as_of = AS_OF_RE.search(html)
-    return {
-        "name": title.group(1).strip() if title else etf_id,
-        "asOf": "-".join(as_of.groups()) if as_of else "",
-        "source": "MoneyDJ",
-        "holdings": holdings,
-    }, None
+# 成分股來源：各投信官網每天公告的申購買回清單／每日持股（見 pcf.py）。
+# 以前爬取 MoneyDJ 的資料不再使用（違反該網站禁止爬蟲的條款），資料庫裡殘留的舊資料也不拿來顯示。
+LEGACY_SOURCES = {"MoneyDJ"}
 
 
 def process_etf_data(etf_id, name, as_of, source, raw_holdings, fetched_at=None):
@@ -93,7 +59,7 @@ def process_etf_data(etf_id, name, as_of, source, raw_holdings, fetched_at=None)
 
 
 # ================= 對外註冊介面 =================
-def register_etf(app, supabase=None, get_holding_details=None):
+def register_etf(app, supabase=None, get_holding_details=None, get_price_map=None):
     etf_bp = Blueprint("etf_bp", __name__)
 
     def with_holding_details(etf_data):
@@ -107,7 +73,8 @@ def register_etf(app, supabase=None, get_holding_details=None):
             return None
         try:
             res = supabase.table("etf_holdings").select("*").eq("etf_id", etf_id).execute()
-            return res.data[0] if res.data else None
+            row = res.data[0] if res.data else None
+            return None if row and row.get("source") in LEGACY_SOURCES else row
         except Exception as e:
             print(f"[{etf_id}] etf_holdings 讀取失敗: {e}")
             return None
@@ -138,15 +105,18 @@ def register_etf(app, supabase=None, get_holding_details=None):
         is_fresh = stored is not None and \
             (datetime.now(timezone.utc) - safe_parse_iso(stored.get("fetched_at"))).total_seconds() < max_age
 
-        processed = None
+        processed, err = None, None
         if not is_fresh:
-            raw, err = fetch_moneydj_holdings(etf_id)
+            price_map = get_price_map() if get_price_map else {}
+            raw, err = fetch_holdings(etf_id, price_map, (price_map.get(etf_id) or {}).get("name", ""))
             if raw:
                 processed = process_etf_data(etf_id, raw["name"], raw["asOf"], raw["source"], raw["holdings"])
                 if processed:
+                    if raw.get("note"):
+                        processed["warnings"].append(raw["note"])
                     save_stored(etf_id, processed)
             else:
-                print(f"[{etf_id}] MoneyDJ 成分股抓取失敗: {err}")
+                print(f"[{etf_id}] 成分股抓取失敗: {err}")
 
         if not processed and stored:
             processed = process_etf_data(etf_id, stored["name"], stored["as_of"], stored["source"],
@@ -156,7 +126,7 @@ def register_etf(app, supabase=None, get_holding_details=None):
                 processed["warnings"].append("暫時無法更新成分股，目前顯示上次抓取的資料")
 
         if not processed:
-            return jsonify({"error": "查無此 ETF 的股票成分資料（債券、期貨型 ETF 不支援）"}), 404
+            return jsonify({"error": err or "查無此 ETF 的股票成分資料（債券、期貨型 ETF 不支援）"}), 404
 
         etf_memory_cache.set(etf_id, processed)
         return jsonify(with_holding_details(processed))
