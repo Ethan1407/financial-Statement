@@ -24,8 +24,23 @@
       <button class="theme-toggle" onclick="toggleTheme()">🌓</button>
     </div>
   </header>
-  <main>
-    <div class="card" style="margin-bottom: 24px;">
+  <main class="has-toc">
+   <div class="toc-layout">
+    <!-- 區塊導覽：寬螢幕固定在左側，窄螢幕變成頂部可橫向捲動的列 -->
+    <aside class="page-toc" id="rules-toc" aria-label="頁面區塊導覽">
+      <p class="page-toc-title">本頁區塊</p>
+      <ul>
+        <li><a href="#rules-basics" data-key="rules-basics" title="系統基礎運作說明">ℹ️ 基礎運作說明</a></li>
+        <li><a href="#rules-table" data-key="rules-table" title="基礎警訊判斷標準">⚠️ 警訊判斷標準</a></li>
+        <li><a href="#rules-market" data-key="rules-market" title="股價警訊的判斷依據">📈 股價警訊依據</a></li>
+        <li><a href="#rules-quality" data-key="rules-quality" title="獲利品質、地雷股與配息規則的依據">🧮 地雷股與配息</a></li>
+        <li><a href="#rules-types" data-key="rules-types" title="不同企業型態的判斷標準">🏢 企業型態標準</a></li>
+        <li><a href="#rules-industry" data-key="rules-industry" title="產業關鍵指標">🏭 產業關鍵指標</a></li>
+        <li><a href="#rules-leading" data-key="rules-leading" title="領先指標與驗證方式">🧭 領先指標驗證</a></li>
+      </ul>
+    </aside>
+    <div class="toc-main">
+    <div class="card" id="rules-basics" style="margin-bottom: 24px;">
       <h2>系統基礎運作說明</h2>
       <p style="margin-top: 8px; color: var(--text-light); line-height: 1.6;">
         本系統資料來源為 FinMind API。判斷門檻會根據「公司產業類型」進行動態適配，以減少因為產業特性帶來的誤判。<br>
@@ -41,7 +56,7 @@
     </div>
 
     <!-- 基礎警訊門檻表 -->
-    <div class="card" style="margin-bottom: 24px;">
+    <div class="card" id="rules-table" style="margin-bottom: 24px;">
       <h3>⚠️ 基礎警訊判斷標準（一般類型）</h3>
       <div class="table-responsive" style="margin-top: 16px;">
         <table>
@@ -54,7 +69,7 @@
     </div>
 
     <!-- 股價規則的依據 -->
-    <div class="card" style="margin-bottom: 24px;">
+    <div class="card" id="rules-market" style="margin-bottom: 24px;">
       <h3>📈 股價警訊的判斷依據</h3>
       <p style="margin-top: 8px; color: var(--text-light); line-height: 1.7; font-size: 0.92rem;">
         只看財報會有落差：財報每季才公布一次，股價卻每天反映市場對公司的看法。學術研究發現，把「股價變數」和「財報變數」一起看，預測公司財務危機的效果比只看財報更好，
@@ -110,7 +125,7 @@
     </div>
 
     <!-- 產業類型調整表 -->
-    <div class="card">
+    <div class="card" id="rules-types">
       <h3>🏢 不同企業型態的判斷標準</h3>
       <p style="margin: 8px 0 16px 0; color: var(--text-light); font-size: 0.9rem;">系統依產業自動判斷公司類型，套用下列調整；也可以在「個股詳情」中手動更改類型。</p>
       <div class="table-responsive">
@@ -124,7 +139,7 @@
     </div>
 
     <!-- 產業關鍵指標與領先指標（insights.py），不計入燈號 -->
-    <div class="card" style="margin-top: 24px;">
+    <div class="card" id="rules-industry" style="margin-top: 24px;">
       <h3>🏭 產業關鍵指標（個股詳情「產業與同業比較」）</h3>
       <p style="margin: 8px 0 16px 0; color: var(--text-light); font-size: 0.9rem; line-height: 1.7;">
         財務比率沒有跨產業通用的標準，因此每種公司類型看不同的關鍵指標，並和資料庫中已有財報的同產業公司比較排名。
@@ -146,7 +161,7 @@
       </div>
     </div>
 
-    <div class="card" style="margin-top: 24px;">
+    <div class="card" id="rules-leading" style="margin-top: 24px;">
       <h3>🧭 領先指標與驗證方式（個股詳情「領先指標與驗證」）</h3>
       <p style="margin: 8px 0 16px 0; color: var(--text-light); font-size: 0.9rem; line-height: 1.7;">
         財報與月營收是<strong>落後指標</strong>，用來避開雷區；領先指標比季報更早出現，用來提早看到變化。先從結構化、可驗證的資料做起；
@@ -187,6 +202,8 @@
       return '<span class="badge yellow">黃燈 (注意)</span>';
     }
 
+    </div><!-- /.toc-main -->
+   </div><!-- /.toc-layout -->
     // 列出某類型相對一般類型的差異：停用的規則、改過的門檻與燈號
     function describeOverrides(profile) {
       const changes = Object.entries(profile.overrides).map(([key, override]) => {
@@ -222,7 +239,17 @@
       ).join('');
     }
 
-    document.addEventListener('DOMContentLoaded', initRules);
+    // 左側區塊導覽：點擊跳轉、捲動時標示目前位置（與個股詳情相同的元件）
+    function initRulesToc() {
+      const toc = document.getElementById('rules-toc');
+      if (!toc) return;
+      setupPageToc(toc, {
+        getMarkers: () => sectionMarkers(toc),
+        resolveTarget: (link) => document.getElementById(link.dataset.key)
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', () => { initRules(); initRulesToc(); });
   </script>
 </body>
 </html>
