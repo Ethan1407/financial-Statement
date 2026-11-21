@@ -55,12 +55,15 @@
         <p class="page-toc-title">本頁區塊</p>
         <ul>
           <li><a href="#overview-card" data-key="overview-card">📊 總覽與風險趨勢</a></li>
+          <li><a href="#quality-card" data-key="quality-card">🧮 獲利品質與體質</a></li>
           <li><a href="#industry-card" data-key="industry-card">🏭 產業與同業比較</a></li>
           <li><a href="#price-card" data-key="price-card">💹 股價與基本面</a></li>
+          <li><a href="#dividend-card" data-key="dividend-card">💰 配息</a></li>
           <li><a href="#news-card" data-key="news-card">📰 相關新聞</a></li>
           <li><a href="#links-card" data-key="links-card">🔗 官方資料連結</a></li>
           <li><a href="#leading-card" data-key="leading-card">🧭 領先指標與驗證</a></li>
           <li><a href="#conf-card" data-key="conf-card">🎤 法人說明會</a></li>
+          <li><a href="#chips-card" data-key="chips-card">📊 籌碼面</a></li>
           <li><a href="#peers-card" data-key="peers-card">🔍 同類型公司</a></li>
           <li><a href="#radar-card" data-key="radar-card">🕸️ 健康度雷達圖</a></li>
           <li><a href="#statements-card" data-key="statements-card">📑 財務報表</a>
@@ -106,6 +109,13 @@
         <div id="detail-alerts-summary" style="margin-top: 12px; font-size: 0.9rem;"></div>
       </div>
 
+      <!-- ================= 獲利品質與財務體質（js/detail-extra.js） ================= -->
+      <div class="card" id="quality-card" style="margin-bottom: 16px;">
+        <h3 style="margin: 0 0 4px 0;">🧮 獲利品質與財務體質</h3>
+        <p class="section-hint">ROE 與杜邦分析、F-score 財務體質分數、地雷股指標（M-score、Z-score）與現金轉換循環。</p>
+        <div id="quality-body"><p style="color:var(--text-light);">計算中…</p></div>
+      </div>
+
       <!-- ================= 產業關鍵指標與同業比較（js/detail-insights.js） ================= -->
       <div class="card" id="industry-card" style="margin-bottom: 16px;">
         <h3 style="margin: 0 0 12px 0;">🏭 產業關鍵指標與同業比較</h3>
@@ -121,6 +131,12 @@
         </div>
         <div id="pf-body"><p style="color:var(--text-light);">股價資料載入中…</p></div>
         <p class="pf-foot" id="pf-foot"></p>
+      </div>
+
+      <!-- ================= 配息（js/detail-extra.js） ================= -->
+      <div class="card" id="dividend-card" style="margin-bottom: 16px;">
+        <h3 style="margin: 0 0 12px 0;">💰 配息</h3>
+        <div id="dividend-body"><p style="color:var(--text-light);">配息資料載入中…</p></div>
       </div>
 
       <!-- ================= 相關新聞區塊 ================= -->
@@ -165,6 +181,12 @@
           <span style="font-size: 0.85rem; color: var(--text-light);">連到證交所、公開資訊觀測站官方頁面</span>
         </div>
         <div id="official-links" class="link-grid"></div>
+        <p class="pf-foot" style="margin-top: 12px;">
+          以下項目無法自動判斷，建議到年報或公開資訊觀測站自行確認：
+          <strong>主要客戶與營收集中度</strong>（年報「主要進銷貨客戶名單」，單一客戶比重過高時營收容易大幅波動）、
+          <strong>會計師查核意見與是否更換會計師</strong>（財務報告書的會計師查核報告；保留、否定或無法表示意見都是重大警訊）。
+          財報逾期未申報的公司會被改為全額交割，已列入股價規則。
+        </p>
       </div>
 
       <!-- ================= 領先指標與驗證（js/detail-insights.js） ================= -->
@@ -191,6 +213,12 @@
         </div>
       </div>
 
+
+      <!-- ================= 籌碼面（js/detail-extra.js），不計分 ================= -->
+      <div class="card" id="chips-card" style="margin-bottom: 16px;">
+        <h3 style="margin: 0 0 4px 0; display:flex; align-items:center; gap:8px; flex-wrap: wrap;">📊 籌碼面 <span class="data-tag">僅供參考，不計分</span></h3>
+        <div id="chips-body"><p style="color:var(--text-light);">籌碼資料載入中…</p></div>
+      </div>
 
       <!-- 同類型公司（階段五）：只依產業類別，不依財務表現排序 -->
       <div class="card" id="peers-card" style="margin-bottom: 16px;">
@@ -236,7 +264,7 @@
           <h4 style="margin-top: 24px;">財務狀況表數據明細</h4>
           <div class="table-responsive">
             <table id="table-balance">
-              <thead><tr><th>季度</th><th>負債比</th><th>流動比</th><th>速動比率</th><th>利息保障倍數</th><th>應收天數</th><th>存貨天數</th></tr></thead>
+              <thead><tr><th>季度</th><th>負債比</th><th>流動比</th><th>速動比率</th><th>利息保障倍數</th><th>應收天數</th><th>存貨天數</th><th>應付天數</th><th>現金轉換循環</th><th>ROE</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
@@ -256,6 +284,7 @@
         <div id="tab-monthly" class="tab-content">
           <p id="monthly-status" style="color: var(--text-light); font-size: 0.9rem; margin: 8px 0;"></p>
           <div id="monthly-body" style="display:none;">
+            <div id="monthly-trend"></div>
             <div class="chart-container"><canvas id="chart-monthly"></canvas></div>
             <h4 style="margin-top: 24px;">月營收數據明細</h4>
             <div class="table-responsive">
@@ -282,6 +311,7 @@
   <script src="js/recommend.js"></script>
   <script src="js/detail-price.js"></script>
   <script src="js/detail-insights.js"></script>
+  <script src="js/detail-extra.js"></script>
   <script> initDetails(); </script>
 </body>
 </html>

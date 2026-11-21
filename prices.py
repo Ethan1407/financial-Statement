@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 from flask import Blueprint, request, jsonify
 
+from insiders import InsiderStore
 from common import get_iso_now, safe_parse_iso, TTLCache, LockRegistry
 
 ID_RE = re.compile(r"^[0-9]{4,6}[A-Za-z]?$")
@@ -125,6 +126,7 @@ class PriceService:
         self.official_cache = TTLCache(ttl=OFFICIAL_TTL, maxsize=1)
         self.shares_cache = TTLCache(ttl=12 * 3600, maxsize=500)
         self.official_lock = threading.Lock()
+        self.insiders = InsiderStore(supabase)
 
     # ================= 即時報價 =================
     def _fetch_mis(self, codes, market_map):
@@ -423,6 +425,11 @@ class PriceService:
             result["dd"], result["ddInputs" if dd is not None else "ddNote"] = dd, info
         else:
             result["ddNote"] = "尚未取得資產負債表（先查詢這檔的財報）"
+        try:
+            result["insider"] = self.insiders.get(sid)  # 董監事持股與質押（每月）
+        except Exception as e:
+            print(f"[{sid}] 董監持股計算失敗: {type(e).__name__}: {e}")
+            result["insider"] = None
         return result
 
     def get_valuation_rows(self, sid):
@@ -470,6 +477,7 @@ class PriceService:
             "valuation": valuation_stats(rows) if rows else None, "valuationError": err,
             "momentum": momentum_stats(adj, bench_adj) if adj else None, "priceError": err2,
             "benchmark": BENCHMARK_ID,
+            "dividendFill": dividend_fill_days(entry["rows"], entry["events"] or []) if entry else [],
         }
 
     def get_summary(self, sid):
@@ -674,6 +682,27 @@ def momentum_stats(adj, bench_adj):
 
     r = lambda d: {k: (round(v, 4) if isinstance(v, float) else v) for k, v in d.items()} if d else None
     return {"stock": r(stats(adj)), "benchmark": r(stats(bench_adj)) if bench_adj else None}
+
+
+def dividend_fill_days(rows, events, limit=6):
+    """最近幾次除權息的填息天數：除息日起，收盤價回到除息前一天收盤價所需的日曆天數；還沒回到則 filled = False"""
+    out = []
+    divs = [e for e in events if e[2] == "div"][-limit:]
+    for ex_date, _, _ in reversed(divs):
+        before = [r for r in rows if r[0] < ex_date]
+        after = [r for r in rows if r[0] >= ex_date]
+        if not before or not after:
+            continue
+        ref = before[-1][4]
+        hit = next((r for r in after if r[4] >= ref), None)
+        ex = datetime.strptime(ex_date, "%Y-%m-%d").date()
+        if hit:
+            out.append({"exDate": ex_date, "refClose": ref, "filled": True, "fillDate": hit[0],
+                        "days": (datetime.strptime(hit[0], "%Y-%m-%d").date() - ex).days})
+        else:
+            out.append({"exDate": ex_date, "refClose": ref, "filled": False, "fillDate": None,
+                        "days": (datetime.strptime(after[-1][0], "%Y-%m-%d").date() - ex).days})
+    return out
 
 
 def adjust_rows(rows, events):

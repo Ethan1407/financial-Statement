@@ -1421,13 +1421,14 @@ function loadDetailView(stockId, skipNews = false) {
 
   [...analysis.data.quarters].reverse().forEach(q => {
     if (tbodyIncome) tbodyIncome.innerHTML += `<tr><td>${q.q}</td><td>${fmt(q.revenue)}</td><td>${fmt(q.revenueYoY, false, '%')}</td><td>${fmt(q.grossMargin, true, '%')}</td><td>${fmt(q.operatingIncome)}</td><td>${fmt(q.operatingMargin, false, '%')}</td><td>${fmt(q.nonOperatingIncome)}</td><td>${fmt(q.netIncome)}</td><td>${fmt(q.eps)}</td></tr>`;
-    if (tbodyBalance) tbodyBalance.innerHTML += `<tr><td>${q.q}</td><td>${fmt(q.debtRatio, false, '%')}</td><td>${fmt(q.currentRatio, true)}</td><td>${fmt(q.quickRatio, true)}</td><td>${fmt(q.interestCoverage, true)}</td><td>${fmt(q.arDays, true)}</td><td>${fmt(q.invDays, true)}</td></tr>`;
+    if (tbodyBalance) tbodyBalance.innerHTML += `<tr><td>${q.q}</td><td>${fmt(q.debtRatio, false, '%')}</td><td>${fmt(q.currentRatio, true)}</td><td>${fmt(q.quickRatio, true)}</td><td>${fmt(q.interestCoverage, true)}</td><td>${fmt(q.arDays, true)}</td><td>${fmt(q.invDays, true)}</td><td>${fmt(q.apDays, true)}</td><td>${fmt(q.ccc, true)}</td><td>${q.roeStatus === 'loss' ? '虧損' : (q.roeStatus === 'negEquity' ? '權益為負' : fmt(q.roe, false, '%'))}</td></tr>`;
     if (tbodyCashflow) tbodyCashflow.innerHTML += `<tr><td>${q.q}</td><td>${fmt(q.operatingCF)}</td><td>${fmt(q.financingCF)}</td><td>${fmt(q.freeCF, true)}</td><td>${fmt(q.cashEnd)}</td></tr>`;
   });
 
   renderOfficialLinks(stockId);
   if (typeof loadPriceFundamentals === 'function') loadPriceFundamentals(stockId, analysis); // 股價與基本面（js/detail-price.js）
   if (typeof loadInsights === 'function') loadInsights(stockId, analysis); // 產業比較、領先指標（js/detail-insights.js）
+  if (typeof loadDetailExtras === 'function') loadDetailExtras(stockId, analysis, skipNews); // 獲利品質、配息、籌碼（js/detail-extra.js）
   setTimeout(() => renderCharts(stockId, analysis.alerts), 0);
   loadMonthly(stockId);
 
@@ -1629,7 +1630,7 @@ async function loadMonthly(stockId) {
   statusEl.innerHTML = '月營收載入中…';
 
   try {
-      const response = await fetch(`${API_BASE}/api/monthly/${encodeURIComponent(stockId)}?months=24`, { signal: monthlyController.signal });
+      const response = await fetch(`${API_BASE}/api/monthly/${encodeURIComponent(stockId)}?months=36`, { signal: monthlyController.signal });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(httpErrorReason(response.status, data));
       monthlyCache[stockId] = data;
@@ -1640,11 +1641,43 @@ async function loadMonthly(stockId) {
   }
 }
 
+// 月營收趨勢：近 3 個月與近 12 個月「平均年增率」的交叉（月增率受淡旺季、農曆年影響大，所以用年增率）
+// 3 個月線往上穿過 12 個月線代表趨勢轉強，往下穿過代表轉弱
+function calcMonthlyTrend(months) {
+  const avgYoY = (i, n) => {
+    if (i - n + 1 < 0) return null;
+    const vals = months.slice(i - n + 1, i + 1).map(m => m.yoy);
+    return vals.every(v => v != null) ? Math.round(vals.reduce((a, b) => a + b, 0) / n * 100) / 100 : null;
+  };
+  const points = months.map((m, i) => ({ ym: m.ym, avg3: avgYoY(i, 3), avg12: avgYoY(i, 12) }));
+  let lastCross = null;
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    if ([a.avg3, a.avg12, b.avg3, b.avg12].some(v => v == null)) continue;
+    if (a.avg3 <= a.avg12 && b.avg3 > b.avg12) lastCross = { ym: b.ym, dir: 'up' };
+    else if (a.avg3 >= a.avg12 && b.avg3 < b.avg12) lastCross = { ym: b.ym, dir: 'down' };
+  }
+  return { points, latest: points[points.length - 1], lastCross };
+}
+
+function monthlyTrendHtml(trend) {
+  const t = trend.latest;
+  if (!t || t.avg3 == null || t.avg12 == null) return '<p class="pf-muted">月營收未滿 2 年，無法計算 3 個月與 12 個月平均年增率。</p>';
+  const above = t.avg3 > t.avg12;
+  const cross = trend.lastCross;
+  const crossText = cross ? `最近一次${cross.dir === 'up' ? '<span class="pf-good">往上穿過</span>' : '<span class="pf-bad">往下穿過</span>'}在 ${escapeHtml(cross.ym)}` : '近期沒有交叉';
+  return `<p style="margin:8px 0;"><strong>營收趨勢：</strong>近 3 個月平均年增率 <strong>${t.avg3}%</strong>，近 12 個月 <strong>${t.avg12}%</strong>，
+    3 個月線在 12 個月線${above ? '<span class="pf-good">上方（短期轉強）</span>' : '<span class="pf-bad">下方（短期轉弱）</span>'}；${crossText}。
+    <span class="pf-muted">往上穿過代表趨勢轉強、往下代表轉弱。</span></p>`;
+}
+
 function renderMonthly(stockId) {
   const statusEl = document.getElementById('monthly-status');
   const bodyEl = document.getElementById('monthly-body');
   const data = monthlyCache[stockId];
-  const months = (data && data.months) || [];
+  const allMonths = (data && data.months) || [];
+  const trend = calcMonthlyTrend(allMonths);
+  const months = allMonths.slice(-24);
   if (!months.length) {
       bodyEl.style.display = 'none';
       statusEl.textContent = '此公司目前沒有月營收資料。';
@@ -1656,6 +1689,8 @@ function renderMonthly(stockId) {
       : (meta.source === 'finmind-direct' ? '（資料庫暫時無法連線，直接向 FinMind 抓取）' : '');
   statusEl.textContent = `最新月份：${data.latestMonth || months[months.length - 1].ym}${stale}`;
   bodyEl.style.display = 'block';
+  const trendEl = document.getElementById('monthly-trend');
+  if (trendEl) trendEl.innerHTML = monthlyTrendHtml(trend);
 
   const pctCell = val => {
       if (val == null) return '<td>—</td>';
@@ -1673,7 +1708,8 @@ function renderMonthlyChart(stockId) {
   const canvas = document.getElementById('chart-monthly');
   const data = monthlyCache[stockId];
   if (!canvas || !data || !data.months || !data.months.length) return;
-  const months = data.months;
+  const trendPts = calcMonthlyTrend(data.months).points.slice(-24);
+  const months = data.months.slice(-24);
   const style = getComputedStyle(document.body);
   const textColor = style.getPropertyValue('--text').trim() || '#e5e7eb';
   const gridColor = style.getPropertyValue('--border').trim() || '#374151';
@@ -1686,7 +1722,9 @@ function renderMonthlyChart(stockId) {
           datasets: [
               // order 較小的畫在上層，讓折線不被半透明長條蓋住
               { label: '月營收 (百萬)', data: months.map(m => m.revenue), backgroundColor: 'rgba(59, 130, 246, 0.5)', yAxisID: 'y', order: 2 },
-              { label: '年增率 (%)', data: months.map(m => m.yoy), type: 'line', borderColor: '#f59e0b', backgroundColor: '#f59e0b', yAxisID: 'y1', order: 1 }
+              { label: '年增率 (%)', data: months.map(m => m.yoy), type: 'line', borderColor: '#f59e0b', backgroundColor: '#f59e0b', yAxisID: 'y1', order: 1 },
+              { label: '近 3 月平均年增 (%)', data: trendPts.map(p => p.avg3), type: 'line', borderColor: '#10b981', backgroundColor: '#10b981', borderWidth: 2, pointRadius: 0, yAxisID: 'y1', order: 0 },
+              { label: '近 12 月平均年增 (%)', data: trendPts.map(p => p.avg12), type: 'line', borderColor: '#8b5cf6', backgroundColor: '#8b5cf6', borderWidth: 2, borderDash: [6, 4], pointRadius: 0, yAxisID: 'y1', order: 0 }
           ]
       },
       options: {

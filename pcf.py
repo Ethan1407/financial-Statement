@@ -102,7 +102,10 @@ def fetch_yuanta(etf_id, price_map):
     data = _get(YUANTA_URL, params=params)
     pcf = data.get("PCF") or {}
     d = str(pcf.get("trandate") or "")
-    base_info = {"name": pcf.get("fundname") or etf_id, "asOf": f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 else ""}
+    as_of = f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 else ""
+    fund = {"aum": _num(pcf.get("totalav")), "units": _num(pcf.get("osunit")), "nav": _num(pcf.get("nav")), "navDate": as_of,
+            "holders": _num((pcf.get("Beneficiary") or {}).get("bf_cnt_a"))}
+    base_info = {"name": pcf.get("fundname") or etf_id, "asOf": as_of, "fund": fund}
 
     # 優先用官方公布的持股權重（現金申贖的 ETF 也有）
     weights = ((data.get("FundWeights") or {}).get("StockWeights")) or []
@@ -163,8 +166,10 @@ def fetch_capital(etf_id, price_map):
             holdings.append({"stockId": sid, "name": s.get("stocName") or sid, "weight": w})
     if not holdings:
         return None, "群益投信的申購買回清單沒有股票成分"
+    fund = {"aum": _num(pcf.get("nav")), "units": _num(pcf.get("totUnit")), "nav": _num(pcf.get("pUnit")),
+            "navDate": str(pcf.get("date2") or "")[:10], "holders": None}
     return {"name": pcf.get("fundName") or etf_id, "asOf": str(pcf.get("date1") or "")[:10],
-            "source": "群益投信申購買回清單", "holdings": holdings, "note": None}, None
+            "source": "群益投信申購買回清單", "holdings": holdings, "note": None, "fund": fund}, None
 
 
 # ================= 復華投信 =================
@@ -208,7 +213,8 @@ SUPPORTED_TEXT = "、".join(ISSUER_NAMES[c] for c in FETCHERS)
 
 
 def fetch_holdings(etf_id, price_map=None, fallback_name=""):
-    """回傳 (raw 或 None, 錯誤訊息)。raw = {name, asOf, source, holdings: [{stockId, name, weight(%)}], note}"""
+    """回傳 (raw 或 None, 錯誤訊息)。raw = {name, asOf, source, holdings: [{stockId, name, weight(%)}], note,
+    fund（有提供時）: {aum 淨資產（元）, units 受益權單位數, nav 每單位淨值, navDate, holders 受益人數}}"""
     issuer = issuer_of(etf_id, fallback_name)
     if issuer not in FETCHERS:
         who = ISSUER_NAMES.get(issuer, "這家投信")

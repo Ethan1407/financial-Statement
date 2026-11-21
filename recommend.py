@@ -24,7 +24,7 @@ MAX_PER_INDUSTRY = 30
 TW_TZ = timezone(timedelta(hours=8))
 
 # 背景預先載入：推薦清單中還沒有財報資料的公司，排進佇列慢慢抓，使用者點進去就能立即查看。
-# 每檔完整抓取花 4 次 FinMind API（免費帳號每小時 600 次），所以限制速度與每日數量，把額度留給使用者查詢。
+# 每檔完整抓取花 5 次 FinMind API（含股利；免費帳號每小時 600 次），所以限制速度與每日數量，把額度留給使用者查詢。
 def _env_int(name, default):
     try:
         return int(os.getenv(name, default))
@@ -33,7 +33,7 @@ def _env_int(name, default):
 
 PREFETCH_ENABLED = os.getenv("REC_PREFETCH", "1") != "0"
 PREFETCH_INTERVAL = _env_int("REC_PREFETCH_INTERVAL", 20)        # 兩檔之間至少相隔幾秒
-PREFETCH_PER_HOUR = _env_int("REC_PREFETCH_PER_HOUR", 20)        # 每小時最多 20 檔（80 次 API）
+PREFETCH_PER_HOUR = _env_int("REC_PREFETCH_PER_HOUR", 20)        # 每小時最多 20 檔（100 次 API）
 PREFETCH_DAILY_CAP = _env_int("REC_PREFETCH_DAILY_CAP", 60)      # 每天最多 60 檔
 PREFETCH_QUEUE_MAX = 60
 PREFETCH_PER_REQUEST = 10                                        # 每次推薦請求最多排入幾檔

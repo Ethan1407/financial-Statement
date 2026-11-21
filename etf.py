@@ -7,6 +7,7 @@ from pcf import fetch_holdings
 # ================= 模組層級全域變數 =================
 etf_memory_cache = TTLCache(ttl=600)
 
+FUND_DS = "ETFFund"           # 基金規模、淨值（存在 raw_finmind，stock_id = ETF 代號）
 ETF_MAX_AGE = 86400            # 成分股每日公布，超過一天才重抓
 MANUAL_REFRESH_MAX_AGE = 3600  # 按「更新」時，超過一小時就重抓
 
@@ -79,6 +80,37 @@ def register_etf(app, supabase=None, get_holding_details=None, get_price_map=Non
             print(f"[{etf_id}] etf_holdings 讀取失敗: {e}")
             return None
 
+    def load_fund(etf_id):
+        if not supabase:
+            return None
+        try:
+            res = supabase.table("raw_finmind").select("payload").eq("stock_id", etf_id).eq("dataset", FUND_DS).execute()
+            return res.data[0]["payload"] if res.data else None
+        except Exception as e:
+            print(f"[{etf_id}] 基金資料讀取失敗: {e}")
+            return None
+
+    def save_fund(etf_id, fund):
+        if not supabase or not fund:
+            return
+        try:
+            supabase.table("raw_finmind").upsert({"stock_id": etf_id, "dataset": FUND_DS, "payload": fund,
+                                                  "fetched_at": get_iso_now()}).execute()
+        except Exception as e:
+            print(f"[{etf_id}] 基金資料寫入失敗: {e}")
+
+    def fund_metrics(etf_id, fund, price_map):
+        """規模、成交量、折溢價：淨值來自投信，收盤價與成交量來自證交所／櫃買中心"""
+        q = (price_map or {}).get(etf_id) or {}
+        out = {"aum": None, "nav": None, "navDate": None, "units": None, "holders": None,
+               "close": q.get("price"), "closeDate": q.get("date"), "volume": q.get("volume"), "premium": None}
+        if fund:
+            out.update({k: fund.get(k) for k in ("aum", "nav", "navDate", "units", "holders")})
+        if out["nav"] and out["close"]:
+            out["premium"] = round((out["close"] - out["nav"]) / out["nav"] * 100, 2)
+            out["premiumSameDay"] = bool(out["navDate"] and out["navDate"] == out["closeDate"])
+        return out
+
     def save_stored(etf_id, processed):
         if not supabase:
             return
@@ -105,11 +137,12 @@ def register_etf(app, supabase=None, get_holding_details=None, get_price_map=Non
         is_fresh = stored is not None and \
             (datetime.now(timezone.utc) - safe_parse_iso(stored.get("fetched_at"))).total_seconds() < max_age
 
-        processed, err = None, None
+        processed, err, raw = None, None, None
         if not is_fresh:
             price_map = get_price_map() if get_price_map else {}
             raw, err = fetch_holdings(etf_id, price_map, (price_map.get(etf_id) or {}).get("name", ""))
             if raw:
+                save_fund(etf_id, raw.get("fund"))
                 processed = process_etf_data(etf_id, raw["name"], raw["asOf"], raw["source"], raw["holdings"])
                 if processed:
                     if raw.get("note"):
@@ -128,6 +161,8 @@ def register_etf(app, supabase=None, get_holding_details=None, get_price_map=Non
         if not processed:
             return jsonify({"error": err or "查無此 ETF 的股票成分資料（債券、期貨型 ETF 不支援）"}), 404
 
+        price_map = get_price_map() if get_price_map else {}
+        processed["fund"] = fund_metrics(etf_id, (raw.get("fund") if raw else None) or load_fund(etf_id), price_map)
         etf_memory_cache.set(etf_id, processed)
         return jsonify(with_holding_details(processed))
 

@@ -14,6 +14,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from common import get_iso_now, safe_parse_iso, is_admin_request, TTLCache, LockRegistry
+from metrics import add_derived, compute_dividends
 
 # Windows 繁中終端機預設 cp950，無法輸出 emoji，統一改用 UTF-8 避免啟動時崩潰
 for _stream in (sys.stdout, sys.stderr):
@@ -51,8 +52,9 @@ else:
     print("⚠️ 提示：未偵測到 Supabase 設定，系統將以純記憶體模式運作。")
 
 # ================= 系統常數與全域變數 =================
-CALC_VERSION = 5  # 5：新增合約負債、資本支出、存貨金額（領先指標與產業指標使用）
+CALC_VERSION = 6  # 5：合約負債、資本支出、存貨；6：ROE/杜邦、F-score、M-score、Z-score、應付天數、配息
 START_DATE = "2019-01-01"
+DIVIDEND_DS = "TaiwanStockDividend"
 
 # 個股代號；00 開頭為 ETF，沒有財報，改由 /api/etf 處理
 STOCK_ID_RE = re.compile(r"^(?!00)[0-9]{4,6}$")
@@ -62,7 +64,7 @@ MANUAL_CHECK_INTERVAL = 600
 
 RATE_LIMIT = 30
 RATE_WINDOW = 60
-RATE_LIMITED_PREFIXES = ('/api/stock', '/api/monthly', '/api/news', '/api/etf', '/api/quotes', '/api/conferences', '/api/recommend', '/api/prices', '/api/industry', '/api/leading')
+RATE_LIMITED_PREFIXES = ('/api/stock', '/api/monthly', '/api/news', '/api/etf', '/api/quotes', '/api/conferences', '/api/recommend', '/api/prices', '/api/industry', '/api/leading', '/api/chips')
 
 try:
     TRUSTED_PROXY_COUNT = int(os.getenv("TRUSTED_PROXY_COUNT", 1))
@@ -91,7 +93,7 @@ DB_FALLBACK_WARNING = "資料庫暫時無法連線，本次直接向 FinMind 抓
 stock_locks = LockRegistry()
 global_lock = threading.Lock()
 
-# 每日新股票完整抓取上限（每檔 4 次 FinMind API；免費帳號每小時 600 次）
+# 每日新股票完整抓取上限（每檔 5 次 FinMind API，含股利；免費帳號每小時 600 次）
 try:
     FULL_FETCH_DAILY_CAP = int(os.getenv("FULL_FETCH_DAILY_CAP", 300))
 except (TypeError, ValueError):
@@ -384,6 +386,7 @@ def compute_financials_from_raw(stock_id, raw_dict):
     populate_dict(cf_raw, cf_by_q)
     
     quarters_data = []
+    aux = {}  # 每季原始金額（百萬元），只給 metrics.py 計算衍生指標用，不輸出
     all_qs = sorted(list(set(list(income_by_q.keys()) + list(bs_by_q.keys()) + list(cf_by_q.keys()))))
     
     def get_val(row_dict, keys):
@@ -445,6 +448,14 @@ def compute_financials_from_raw(stock_id, raw_dict):
         cl_cur = get_val(bs_row, ["CurrentContractLiabilities", "ContractLiabilitiesCurrent", "合約負債－流動", "合約負債-流動"])
         cl_non = get_val(bs_row, ["NoncurrentContractLiabilities", "ContractLiabilitiesNoncurrent", "合約負債－非流動", "合約負債-非流動"])
         contract_liab = scale_val(cl_cur + (cl_non or 0)) if cl_cur is not None else scale_val(cl_non)
+        # 應付帳款（含關係人），算應付天數與現金轉換循環
+        ap_main = get_val(bs_row, ["AccountsPayable", "應付帳款"])
+        ap_rel = get_val(bs_row, ["AccountsPayableToRelatedParties", "應付帳款－關係人", "應付帳款-關係人"])
+        ap_total = scale_val((ap_main or 0) + (ap_rel or 0)) if (ap_main is not None or ap_rel is not None) else None
+        # 長期負債：長期借款 + 應付公司債；有資產負債表但沒有這兩個科目時視為 0
+        lt_borrow = get_val(bs_row, ["LongtermBorrowings", "長期借款"])
+        bonds = get_val(bs_row, ["BondsPayable", "應付公司債"])
+        long_debt = scale_val((lt_borrow or 0) + (bonds or 0)) if bs_row else None
         cash_end = scale_val(get_val(merged_row, ["CashBalancesEndOfPeriod", "期末現金及約當現金餘額", "期末現金及約當現金", "CashAndCashEquivalents", "現金及約當現金"]))
 
         op_cf_keys = ["NetCashFlowsFromOperatingActivities", "NetCashInflowFromOperatingActivities", "CashFlowsFromOperatingActivities", "營業活動之淨現金流入", "營業活動之淨現金流入(流出)", "營業活動之現金流量－淨額"]
@@ -466,6 +477,10 @@ def compute_financials_from_raw(stock_id, raw_dict):
         currentRatio = safe_div(current_assets, current_liabilities)
         arDays = safe_div((ar * 90) if ar is not None else None, revenue)
         invDays = safe_div((inv * 90) if inv is not None else None, cogs)
+        apDays = safe_div((ap_total * 90) if ap_total is not None else None, cogs)
+        # 現金轉換循環 = 應收天數 + 存貨天數 − 應付天數（沒有存貨科目的公司存貨天數視為 0）
+        ccc = arDays + (invDays or 0) - apDays if arDays is not None and apDays is not None else None
+        pretax = scale_val(get_val(inc_row, ["PreTaxIncome", "稅前淨利(淨損)", "稅前淨利", "繼續營業單位稅前淨利(淨損)"]))
         quickRatio = (current_assets - raw_inv) / current_liabilities if current_assets is not None and current_liabilities and raw_inv is not None else None
         
         interestStatus = "missing"
@@ -473,7 +488,7 @@ def compute_financials_from_raw(stock_id, raw_dict):
         
         if is_financial:
             grossMargin = currentRatio = arDays = invDays = free_cf = quickRatio = interestCoverage = None
-            contract_liab = capex = inv = None
+            contract_liab = capex = inv = apDays = ccc = None
             interestStatus = "n/a"
         else:
             if "income" not in missing and "cashflow" not in missing:
@@ -503,8 +518,21 @@ def compute_financials_from_raw(stock_id, raw_dict):
             "quickRatio": safe_round(quickRatio, 2), "arDays": safe_round(arDays, 0), "invDays": safe_round(invDays, 0),
             "operatingCF": safe_round(operating_cf, 0), "financingCF": safe_round(financing_cf, 0), "freeCF": safe_round(free_cf, 0), "cashEnd": safe_round(cash_end, 0),
             "contractLiabilities": safe_round(contract_liab, 0), "capex": safe_round(abs(capex), 0) if capex is not None else None,
-            "inventory": safe_round(inv, 0)
+            "inventory": safe_round(inv, 0), "apDays": safe_round(apDays, 0), "ccc": safe_round(ccc, 0)
         })
+        aux[q_str] = {
+            "rev": revenue, "gp": gross_profit, "ni": net_income, "ocf": operating_cf, "fcf": free_cf,
+            "ta": scale_val(total_assets), "tl": scale_val(total_liabilities), "te": scale_val(total_equity),
+            "ca": scale_val(current_assets), "cl": scale_val(current_liabilities), "ar": ar, "contract": contract_liab,
+            "ppe": scale_val(get_val(bs_row, ["PropertyPlantAndEquipment", "不動產、廠房及設備"])),
+            "re": scale_val(get_val(bs_row, ["RetainedEarnings", "保留盈餘合計", "保留盈餘"])),
+            "ltd": long_debt,
+            "share": scale_val(get_val(bs_row, ["OrdinaryShare", "普通股股本", "CapitalStock", "股本合計"])),
+            "premium": scale_val(get_val(bs_row, ["CapitalSurplusAdditionalPaidInCapital", "資本公積－發行溢價", "資本公積-發行溢價"])),
+            "dep": scale_val(get_single_q_cf(cf_by_q, q_str, ["Depreciation", "折舊費用"])),
+            "opex": scale_val(get_val(inc_row, ["OperatingExpenses", "營業費用", "營業費用合計"])),
+            "ebit": (pretax + abs(interest_expense or 0)) if pretax is not None else None,
+        }
 
     op_cfs = [abs(q['operatingCF']) for q in quarters_data if q['operatingCF'] is not None]
     cf_median = 0
@@ -527,6 +555,9 @@ def compute_financials_from_raw(stock_id, raw_dict):
         if "QUICK_GT_CURRENT" in q['qualityFlags']: warnings.append(f"{q['q']} 速動比率不可能大於流動比率(邏輯異常)")
         if "QUICK_EQ_CURRENT" in q['qualityFlags']: warnings.append(f"{q['q']} 存貨大於0但速動比率四捨五入後等於流動比率(可能存貨過小)")
 
+    add_derived(quarters_data, aux, is_financial)
+    dividends = compute_dividends(raw_dict.get("TaiwanStockDividend"), quarters_data, aux)
+
     latestQuarterPartial = bool(quarters_data[-1]["missing"]) if quarters_data else False
     latestCompleteQuarter = next((q["q"] for q in reversed(quarters_data) if not q["missing"]), None)
     
@@ -538,7 +569,7 @@ def compute_financials_from_raw(stock_id, raw_dict):
     return {
         "calcVersion": CALC_VERSION, "name": name, "industry": industry, "industryAll": industry_all, "isFinancial": is_financial,
         "latestQuarterPartial": latestQuarterPartial, "latestCompleteQuarter": latestCompleteQuarter,
-        "warnings": warnings, "quarters": quarters_data, "_latest_income_date": latest_income_date
+        "warnings": warnings, "quarters": quarters_data, "dividends": dividends, "_latest_income_date": latest_income_date
     }
 
 def compute_monthly_from_raw(stock_id, raw_dict):
@@ -633,6 +664,12 @@ def process_financials(stock_id, refresh_mode=False, allow_full=True):
             db_checked_at = db_res.get("checked_at")
 
             raw_dict = get_raw_from_db(stock_id) if db_calc_v < CALC_VERSION else None
+            if raw_dict and DIVIDEND_DS not in raw_dict:
+                # 舊資料沒有股利：版本升級重算時補抓一次（1 次 API）
+                div_data, div_err = fetch_finmind_data(DIVIDEND_DS, stock_id)
+                if not div_err:
+                    raw_dict[DIVIDEND_DS] = div_data or []
+                    upsert_raw_to_db(stock_id, DIVIDEND_DS, raw_dict[DIVIDEND_DS])
             if raw_dict:
                 new_res = compute_financials_from_raw(stock_id, raw_dict)
                 latest_inc_date = new_res.pop("_latest_income_date")
@@ -703,6 +740,12 @@ def process_financials(stock_id, refresh_mode=False, allow_full=True):
                     cf_data, _ = f2.result()
                 
                 finmind_calls = 3
+                # 有新財報時一併更新股利（董事會通常和財報一起決議配息）
+                div_data, div_err = fetch_finmind_data(DIVIDEND_DS, stock_id)
+                if not div_err:
+                    finmind_calls = 4
+                    raw_dict[DIVIDEND_DS] = div_data or []
+                    upsert_raw_to_db(stock_id, DIVIDEND_DS, raw_dict[DIVIDEND_DS])
                 raw_dict["TaiwanStockFinancialStatements"] = merge_raw_data(old_income, probe_data)
                 if bs_data: raw_dict["TaiwanStockBalanceSheet"] = merge_raw_data(raw_dict.get("TaiwanStockBalanceSheet", []), bs_data)
                 if cf_data: raw_dict["TaiwanStockCashFlowsStatement"] = merge_raw_data(raw_dict.get("TaiwanStockCashFlowsStatement", []), cf_data)
@@ -794,7 +837,7 @@ def ensure_storage_capacity():
             monthly_memory_cache.pop(f"{sid}_monthly")
 
 def full_fetch_financials(stock_id, use_db=True):
-    """從 START_DATE 起完整抓取四個資料集並重算。呼叫端需持有 stock lock 並已通過 check_daily_cap。
+    """從 START_DATE 起完整抓取五個資料集（含股利）並重算。呼叫端需持有 stock lock 並已通過 check_daily_cap。
     use_db=False 時（資料庫連不上）不讀寫資料庫，結果只放記憶體快取。"""
     if use_db: ensure_storage_capacity()
     # 先抓損益表確認有財報，查無資料（代號不存在）只花 1 次 API，也不寫入 DB
@@ -804,9 +847,9 @@ def full_fetch_financials(stock_id, use_db=True):
     if not income_data:
         return None, "查無此股票的財報資料", 404
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         fs = {ds: executor.submit(fetch_finmind_data, ds, stock_id)
-              for ds in ("TaiwanStockInfo", "TaiwanStockBalanceSheet", "TaiwanStockCashFlowsStatement")}
+              for ds in ("TaiwanStockInfo", "TaiwanStockBalanceSheet", "TaiwanStockCashFlowsStatement", DIVIDEND_DS)}
         raw_dict = {ds: f.result()[0] or [] for ds, f in fs.items()}
     raw_dict["TaiwanStockFinancialStatements"] = income_data
 
@@ -830,9 +873,9 @@ def full_fetch_financials(stock_id, use_db=True):
         new_res["warnings"].append(DB_FALLBACK_WARNING)
 
     source = "full" if use_db or supabase is None else "finmind-direct"
-    new_res["meta"] = {"source": source, "finmindCalls": 4, "checkedAt": now_str, "stale": False}
+    new_res["meta"] = {"source": source, "finmindCalls": 5, "checkedAt": now_str, "stale": False}
     new_res["_updated_at"] = now_str
-    record_stats(source, 4, is_full=True)
+    record_stats(source, 5, is_full=True)
     return new_res, None, 200
 
 def process_monthly(stock_id, refresh_mode=False):
@@ -989,6 +1032,27 @@ def get_refresh_mode():
         return False
     return "force" if is_admin_request() else "check"
 
+FILING_GRACE_DAYS = 10  # 法定期限後再等 10 天（FinMind 收錄需要時間），避免誤判
+
+def filing_status(result):
+    """最近一個已過法定期限的季度是否已有財報。
+    只有這份資料是在「期限 + 寬限」之後向 FinMind 檢查過的，才判斷為延遲；否則回傳 unknown。"""
+    today = get_tw_now().date()
+    q = f"{today.year}Q{(today.month - 1) // 3 + 1}"
+    for _ in range(8):
+        deadline = q_report_date(q)
+        if deadline + timedelta(days=FILING_GRACE_DAYS) <= today:
+            break
+        q = q_shift(q, -1)
+    latest = result.get("latestCompleteQuarter")
+    info = {"expected": q, "deadline": deadline.isoformat(), "latest": latest, "status": "ok"}
+    if latest and latest >= q:
+        return info
+    checked = safe_parse_iso((result.get("meta") or {}).get("checkedAt"))
+    grace_end = datetime(deadline.year, deadline.month, deadline.day, tzinfo=timezone(timedelta(hours=8))) + timedelta(days=FILING_GRACE_DAYS)
+    info["status"] = "late" if checked >= grace_end else "unknown"
+    return info
+
 def generate_etag(stock_id, updated_at, limit):
     return f'W/"{stock_id}-v{CALC_VERSION}-{updated_at}-{limit}"'
 
@@ -1060,6 +1124,7 @@ def api_get_stock(stock_id):
         res_copy = dict(cached)
         res_copy.pop("_updated_at", None)
         res_copy['quarters'] = res_copy['quarters'][-limit:] if limit < len(res_copy['quarters']) else res_copy['quarters']
+        res_copy['filing'] = filing_status(res_copy)
         record_stats("mem-cache", 0)
         print(f"[{stock_id}] meta.source: mem-cache | finmindCalls: 0")
         response = make_response(jsonify(res_copy))
@@ -1086,6 +1151,7 @@ def api_get_stock(stock_id):
     res_copy = dict(result)
     res_copy.pop("_updated_at", None)
     res_copy['quarters'] = res_copy['quarters'][-limit:] if limit < len(res_copy['quarters']) else res_copy['quarters']
+    res_copy['filing'] = filing_status(res_copy)
     response = make_response(jsonify(res_copy))
     response.headers['ETag'] = etag
     response.headers['Cache-Control'] = 'no-cache'
@@ -1129,6 +1195,7 @@ def api_get_stocks_batch():
             res_copy = dict(cached)
             res_copy.pop("_updated_at", None)
             res_copy['quarters'] = res_copy['quarters'][-limit:] if limit < len(res_copy['quarters']) else res_copy['quarters']
+            res_copy['filing'] = filing_status(res_copy)
             results[sid] = res_copy
             record_stats("mem-cache", 0)
             print(f"[{sid}] batch meta.source: mem-cache | finmindCalls: 0")
@@ -1155,6 +1222,7 @@ def api_get_stocks_batch():
             res_copy = dict(res)
             res_copy.pop("_updated_at", None)
             res_copy['quarters'] = res_copy['quarters'][-limit:] if limit < len(res_copy['quarters']) else res_copy['quarters']
+            res_copy['filing'] = filing_status(res_copy)
             results[sid] = res_copy
 
     return jsonify({"results": results, "errors": errors})
@@ -1314,8 +1382,9 @@ from etf import register_etf
 from quotes import register_quotes, get_price_map
 from mops import register_mops
 from recommend import register_recommend, normalize_industry
-from insights import register_insights
+from insights import register_insights, q_report_date, q_shift
 from prices import register_prices
+from chips import register_chips
 register_news(app, supabase=supabase)
 register_etf(app, supabase=supabase, get_holding_details=get_holding_details, get_price_map=get_price_map)
 register_quotes(app, get_industry_map=get_industry_map)
@@ -1340,6 +1409,7 @@ def fetch_finmind_for_prices(dataset, stock_id=None, start_date=START_DATE):
     return fetch_finmind_data(dataset, stock_id, start_date)
 
 register_prices(app, supabase=supabase, fetch_finmind=fetch_finmind_for_prices, get_price_map=get_price_map)
+register_chips(app, supabase=supabase, fetch_finmind=fetch_finmind_for_prices)
 conference_store = register_mops(app, supabase=supabase)
 def prefetch_financials(stock_id):
     """推薦清單的背景預先載入：只在資料庫可用時抓（結果要存進資料庫才有意義），並放進記憶體快取。

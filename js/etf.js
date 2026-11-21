@@ -143,6 +143,11 @@ async function renderEtfView(etfId) {
       </div>
 
       <div class="card" style="margin-bottom:16px;">
+         <h3 style="margin:0 0 12px 0;">基金規模與交易</h3>
+         <div id="etf-fund-body"><p style="color:var(--text-light);">資料載入中…</p></div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px;">
          <div class="flex-between" style="margin-bottom:8px; flex-wrap:wrap; gap:8px;">
             <h3 style="margin:0;">成分股財報風險</h3>
             <span class="status-indicator"><span class="dot" id="etf-risk-dot"></span><span id="etf-risk-verdict">--</span></span>
@@ -270,10 +275,48 @@ async function renderEtfView(etfId) {
         warnDiv.innerHTML = msgs.map(m => `<div>⚠️ ${escapeHtml(m)}</div>`).join('');
     }
 
+    renderEtfFund(etfData.fund);
+
     currentEtfHoldings = etfData.holdings || [];
     etfExpanded = false;
     etfSortBy = 'weight';
     refreshEtfHoldings();
+}
+
+// 規模、淨值、折溢價、成交量：淨值與規模來自投信公告，收盤價與成交量來自證交所／櫃買中心
+const ETF_SMALL_AUM = 5e8;  // 規模低於 5 億元時提醒（各基金信託契約訂有終止門檻，常見為淨資產低於 1 億元）
+function renderEtfFund(fund) {
+    const el = document.getElementById('etf-fund-body');
+    if (!el) return;
+    if (!fund) { el.innerHTML = '<p style="color:var(--text-light);">暫時無法取得。</p>'; return; }
+    const tile = (label, value, sub = '') => `<div><div style="color:var(--text-light); font-size:0.9rem;">${label}</div>
+        <div style="font-size:1.4rem; font-weight:bold;">${value}</div><div style="color:var(--text-light); font-size:0.85rem;">${sub}</div></div>`;
+    const aum = fund.aum ? `${(fund.aum / 1e8).toLocaleString('zh-TW', { maximumFractionDigits: 1 })} 億` : '—';
+    let premium = '—', premiumSub = '投信沒有公布淨值';
+    if (fund.premium !== null && fund.premium !== undefined) {
+        const p = fund.premium;
+        const cls = Math.abs(p) >= 1 ? (p > 0 ? 'color:var(--red)' : 'color:var(--green)') : '';
+        premium = `<span style="${cls}">${p > 0 ? '+' : ''}${p}%</span>`;
+        premiumSub = `收盤 ${fund.close}（${escapeHtml(fund.closeDate || '')}）vs 淨值 ${fund.nav}（${escapeHtml(fund.navDate || '')}）${fund.premiumSameDay ? '' : '，日期不同僅供參考'}`;
+    }
+    const notes = [];
+    if (fund.aum && fund.aum < ETF_SMALL_AUM) notes.push('⚠️ 規模偏小：ETF 規模太小可能被清算下市（各基金信託契約訂有終止門檻，常見為淨資產低於 1 億元）。');
+    if (fund.premium !== null && fund.premium !== undefined && Math.abs(fund.premium) >= 1) {
+        notes.push(`⚠️ ${fund.premium > 0 ? '溢價' : '折價'}超過 1%：市價和淨值差距較大，${fund.premium > 0 ? '此時買進等於付比資產價值更高的價格' : '賣出時會少拿一些'}。`);
+    }
+    if (fund.volume !== null && fund.volume !== undefined && fund.volume < 100) notes.push('⚠️ 成交量很少：想買賣時可能不容易成交，或價格偏離淨值。');
+    el.innerHTML = `
+      <div class="grid-3" style="margin-top:0;">
+        ${tile('基金規模（淨資產）', aum, fund.units ? `受益權單位 ${(fund.units / 1e8).toLocaleString('zh-TW', { maximumFractionDigits: 2 })} 億${fund.holders ? `・受益人 ${Number(fund.holders).toLocaleString()} 人` : ''}` : '')}
+        ${tile('折溢價', premium, premiumSub)}
+        ${tile('成交量', fund.volume !== null && fund.volume !== undefined ? `${Number(fund.volume).toLocaleString()} 張` : '—', fund.closeDate ? `${escapeHtml(fund.closeDate)} 單日` : '')}
+      </div>
+      ${notes.length ? `<div style="margin-top:12px; color:var(--yellow); font-size:0.9rem; line-height:1.7;">${notes.map(escapeHtml).join('<br>')}</div>` : ''}
+      <p style="margin-top:12px; color:var(--text-light); font-size:0.85rem; line-height:1.6;">
+        總費用率（經理費＋保管費等）與追蹤誤差沒有官方的開放資料可以自動取得，請到投信官網或
+        <a href="https://www.sitca.org.tw/" target="_blank" rel="noopener noreferrer">投信投顧公會</a>查詢（高股息 ETF 總費用率約 0.6% 屬常見水準）。
+        淨值與規模目前支援元大、群益投信。
+      </p>`;
 }
 
 // 成分股財報有變動（剛查詢完）時，重新計算風險、重畫摘要與清單，並更新首頁卡片用的風險摘要

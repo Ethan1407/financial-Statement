@@ -61,7 +61,7 @@
       <div class="table-responsive" style="margin-top: 16px;">
         <table>
           <thead>
-            <tr><th style="width: 15%">嚴重程度</th><th style="width: 12%">報表</th><th style="width: 22%">警訊名稱</th><th>具體判斷條件與門檻</th></tr>
+            <tr><th style="width: 15%">嚴重程度</th><th style="width: 12%">類別</th><th style="width: 22%">警訊名稱</th><th>具體判斷條件與門檻</th></tr>
           </thead>
           <tbody id="rules-table-body"></tbody>
         </table>
@@ -122,6 +122,21 @@
       <p style="margin-top: 10px; color: var(--text-light); font-size: 0.85rem; line-height: 1.6;">
         研究的樣本為美國上市公司，台股有 ±10% 漲跌幅限制，波動度通常較低，因此直接採用美國破產公司的水準會更不容易觸發（更保守）。股價資料來自 FinMind、證交所與櫃買中心，每 3 小時更新一次，超過 3 天的資料不會拿來判斷。
       </p>
+    </div>
+
+    <!-- 獲利品質、地雷股與配息規則的依據 -->
+    <div class="card" id="rules-quality" style="margin-bottom: 24px;">
+      <h3>🧮 獲利品質、地雷股與配息規則的依據</h3>
+      <ul style="margin-top: 8px; color: var(--text-light); line-height: 1.8; font-size: 0.92rem; padding-left: 20px;">
+        <li><strong>ROE 與杜邦分析</strong>：ROE = 近 4 季淨利 ÷ 平均股東權益（期初、期末平均），拆成淨利率 × 資產週轉率 × 權益乘數。虧損或權益為負時 ROE 沒有意義，不判斷趨勢；雷達圖獲利構面的 ROE 以 20% 為滿分，虧損給 0 分。</li>
+        <li><strong>Piotroski F-score</strong>（Piotroski, 2000, <em>Journal of Accounting Research</em>）：9 項財務體質檢查，顯示在個股詳情，不計入燈號。原始研究的樣本是低股價淨值比的股票，分數高只代表體質改善，不是選股保證。台灣常見盈餘轉增資，因此「股本與發行溢價都增加 2% 以上」才視為現金增資；長期負債以長期借款加應付公司債計算。</li>
+        <li><strong>Beneish M-score</strong>（Beneish, 1999, <em>Financial Analysts Journal</em>）：8 變數模型，大於 −1.78 視為財報可能被操縱。管銷費用以營業費用代替；以近 4 季與前 4 季比較。模型以美國公司建立，高成長公司分數容易偏高，金融業不適用，只給黃燈。</li>
+        <li><strong>Altman Z-score</strong>（Altman, 1968；Z'' 為 Altman 2000 修正版）：電子、傳產等製造業用原始 Z-score（市值來自股價資料，危險區 &lt; 1.81），其他產業用只看帳面數字的 Z''-score（危險區 &lt; 1.1）。原始樣本為美國製造業，國內也有研究討論它在台灣的適用性，建議和違約距離一起看；金融業不適用。</li>
+        <li><strong>現金轉換循環</strong> = 應收天數 + 存貨天數 − 應付天數，和去年同季比較以避開淡旺季。應付天數突然大增可能代表延後付款給供應商來撐現金。營建業存貨週期長，兩條規則都不檢查。</li>
+        <li><strong>配息</strong>：資料來自 FinMind 的股利政策（依盈餘所屬年度彙總，季配息公司 4 季都公布才算整年）。盈餘分配率超過 80% 黃燈、超過 100% 或虧損仍配息紅燈；近 3 年自由現金流合計少於現金股利總額給黃燈。兩條只在「高股息／存股型」檢查。殖利率會和距離 52 週高點一起顯示，避免股價大跌造成的「殖利率陷阱」。</li>
+        <li><strong>董監事持股</strong>：證交所、櫃買中心每月公布的「董監事持股餘額明細」。質押比超過 50% 給黃燈；持股連續 2 個月減少且累計 3% 以上給黃燈（從系統開始記錄的月份起比較）。</li>
+        <li><strong>財報延遲申報</strong>：超過法定期限 10 天仍查不到該季財報才給黃燈，且只在期限後實際檢查過資料時判斷，避免把資料源延遲誤判成公司延遲。會計師查核意見與更換會計師沒有官方開放資料、公開資訊觀測站也會封鎖程式查詢，因此不自動判斷，個股詳情的官方資料連結區有提醒。</li>
+      </ul>
     </div>
 
     <!-- 產業類型調整表 -->
@@ -187,6 +202,8 @@
         <li>門檻為本系統的設定值，會依驗證結果調整。</li>
       </ul>
     </div>
+    </div><!-- /.toc-main -->
+   </div><!-- /.toc-layout -->
   </main>
   <footer class="site-footer">本網站資料來自公開資訊（FinMind、證交所、櫃買中心、各投信公告的 ETF 申購買回清單），依財報數據自動計算，可能有延遲或誤差；所有內容僅供參考，不構成投資建議。</footer>
 
@@ -195,6 +212,8 @@
   <script src="js/app.js"></script>
   <script>
     const TAB_LABELS = { income: '損益表', balance: '資產負債表', cashflow: '現金流量表', market: '股價' };
+    const GROUP_LABELS = { quality: '獲利品質', workingCapital: '營運資金', redFlag: '地雷股', dividend: '配息', governance: '公司治理' };
+    const onlyTypesNote = r => r.onlyTypes ? `<br><span style="color:var(--text-light); font-size:0.85rem;">只檢查：${r.onlyTypes.map(t => TYPE_PROFILES[t].label).join('、')}</span>` : '';
 
     function levelBadge(level) {
       if (level === 'red') return '<span class="badge red">紅燈 (警戒)</span>';
@@ -202,8 +221,6 @@
       return '<span class="badge yellow">黃燈 (注意)</span>';
     }
 
-    </div><!-- /.toc-main -->
-   </div><!-- /.toc-layout -->
     // 列出某類型相對一般類型的差異：停用的規則、改過的門檻與燈號
     function describeOverrides(profile) {
       const changes = Object.entries(profile.overrides).map(([key, override]) => {
@@ -231,7 +248,7 @@
       document.getElementById('info-q').textContent = latestQ || '--';
 
       document.getElementById('rules-table-body').innerHTML = Object.values(RULES_CONFIG).map(r =>
-          `<tr><td>${levelBadge(r.level)}</td><td>${TAB_LABELS[r.tab]}</td><td><strong>${r.name}</strong></td><td>${r.why(r)}</td></tr>`
+          `<tr><td>${levelBadge(r.level)}</td><td>${GROUP_LABELS[r.group] || TAB_LABELS[r.tab]}</td><td><strong>${r.name}</strong></td><td>${r.why(r)}${onlyTypesNote(r)}</td></tr>`
       ).join('');
 
       document.getElementById('type-table-body').innerHTML = Object.values(TYPE_PROFILES).map(t =>

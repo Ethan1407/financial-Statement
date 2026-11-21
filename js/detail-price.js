@@ -9,7 +9,7 @@
 // 5. 價值＋動能並用：Asness, Moskowitz & Pedersen (2013) "Value and Momentum Everywhere"，兩者一起看比單看一種好
 // 資料：後端 /api/prices/valuation/<代號>（證交所每日本益比／股價淨值比／殖利率、還原權息日 K）、
 //       股價規則的結果（rules.js，資料來自 /api/prices/risk）
-// 本區塊只提供分析，不另外計分；計入燈號與風險分數的只有 rules.js 的 5 條股價規則
+// 本區塊只提供分析，不另外計分；計入燈號與風險分數的是 rules.js 的股價與董監持股規則（market: true）
 // ==========================================
 
 const DPF = { cache: {}, controller: null, currentId: null, riskState: {} };
@@ -44,6 +44,7 @@ async function loadPriceFundamentals(stockId, analysis) {
     if (!res.ok) throw new Error(httpErrorReason(res.status, data));
     DPF.cache[stockId] = data;
     if (DPF.failed === stockId) DPF.failed = null;
+    window.dispatchEvent(new CustomEvent('valuationloaded', { detail: { stockId } })); // 配息區塊用填息天數
     if (DPF.currentId === stockId) dpfRender(stockId, window.currentAnalysis || analysis, data);
   } catch (err) {
     // 換了別檔，或同一檔重畫時取消了舊請求：不顯示錯誤（新的請求會接手）
@@ -187,7 +188,12 @@ function dpfRiskHtml(stockId, analysis) {
     ['priceUnderperform', market.exret3m != null ? `每月平均 ${dpfPct(market.exret3m)}（相對 0050）` : null, '≤ −11.5% → 黃燈'],
     ['priceVolatility', market.sigma3m != null ? `近 3 個月年化 ${pct(market.sigma3m)}` : null, '≥ 106.1% → 黃燈'],
     ['distanceToDefault', analysis.effectiveType === 'financial' ? null : (market.dd != null ? `${market.dd}` : null), '< 1 黃燈、< 0 紅燈',
-      analysis.effectiveType === 'financial' ? '金融業不適用' : market.ddNote]
+      analysis.effectiveType === 'financial' ? '金融業不適用' : market.ddNote],
+    ['pledgeHigh', market.insider ? `${market.insider.ym} 質押比 ${market.insider.pledgeRatio}%（董監持股 ${market.insider.holdingLots.toLocaleString()} 張）` : null,
+      '> 50% → 黃燈', '查無董監事持股資料'],
+    ['insiderSelling', market.insider ? (market.insider.changes.length
+      ? `近幾個月變化（新到舊）：${market.insider.changes.slice(0, 3).map(c => `${c > 0 ? '+' : ''}${c}%`).join('、')}`
+      : `從 ${market.insider.ym} 開始記錄，下個月起可比較`) : null, '連續 2 個月減少且累計 ≥ 3% → 黃燈', '查無董監事持股資料']
   ];
   const rows = items.map(([key, value, threshold, naReason]) => {
     const rule = RULES_CONFIG[key];
@@ -212,7 +218,23 @@ function dpfRiskHtml(stockId, analysis) {
   return `<div class="table-responsive" style="margin-top:0;"><table class="pf-risk-table">
       <thead><tr><th>結果</th><th>規則</th><th>目前數值</th><th class="pf-risk-th">門檻</th></tr></thead>
       <tbody>${rows}</tbody></table></div>
-    <p class="pf-muted" style="margin-top:8px;">這 5 條規則會計入燈號與風險分數，門檻依據見<a href="rules.html">規則與說明</a>。名詞：${termHtml('波動度')}、${termHtml('違約距離')}</p>`;
+    <p class="pf-muted" style="margin-top:8px;">這 ${items.length} 條規則會計入燈號與風險分數，門檻依據見<a href="rules.html">規則與說明</a>。名詞：${termHtml('波動度')}、${termHtml('違約距離')}。
+      董監事持股來自證交所、櫃買中心每月公布的「董監事持股餘額明細」。</p>`;
+}
+
+// 殖利率陷阱：殖利率變高也可能只是股價大跌，和距離 52 週高點一起看
+function dpfYieldTrapHtml(val, mom) {
+  const y = val && val.yield;
+  if (!y || y.current === null || y.current === undefined || !mom || mom.fromHigh52 === null || mom.fromHigh52 === undefined) return '';
+  const high = y.percentile >= DPF_HIGH_PCT || y.current >= 6;
+  const fell = mom.fromHigh52 <= -0.2;
+  const facts = `殖利率 ${y.current}%（近 5 年中位數 ${y.median ?? '—'}%），股價距離 52 週高點 ${dpfPct(mom.fromHigh52)}（含股利）`;
+  if (high && fell) {
+    return `<p>${facts}：<span class="pf-bad">留意殖利率陷阱</span>，殖利率偏高主要可能是股價大跌造成，
+      若之後獲利衰退、股利跟著減少，實際領到的殖利率會比現在看到的低。請搭配財報警訊與下方配息紀錄確認。</p>`;
+  }
+  if (high) return `<p>${facts}：殖利率偏高，股價沒有大跌，比較不像是跌出來的高殖利率。</p>`;
+  return `<p class="pf-muted">${facts}。</p>`;
 }
 
 // 價值＋動能的綜合判讀（Asness, Moskowitz & Pedersen 2013）
@@ -256,6 +278,7 @@ function dpfRender(stockId, analysis, data) {
         ${dpfValuationRow('股價淨值比', '股價淨值比', val.pbr, ' 倍', false)}
         ${dpfValuationRow('殖利率', '殖利率', val.yield, '%', true)}
       </tbody></table></div>
+    ${dpfYieldTrapHtml(val, mom)}
     ${dpfPegHtml(val.per && val.per.current, eg)}` : `<p class="pf-muted">估值資料無法取得${data.valuationError ? `（${escapeHtml(data.valuationError)}）` : ''}。</p>`;
 
   body.innerHTML = `

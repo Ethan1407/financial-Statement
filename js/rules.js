@@ -21,7 +21,7 @@ const INDUSTRY_TO_TYPE = {
 const SCORE_CONFIG = {
     baseline: 60,
     window: 4,                                   // 近幾季合計
-    profit: { gross: [0, 50], op: [0, 25] },     // 毛利率 50%、營益率 25% 才滿分
+    profit: { gross: [0, 50], op: [0, 25], roe: [0, 20] },  // 毛利率 50%、營益率 25%、ROE 20% 才滿分
     growth: { yoy: [-20, 30] },                  // 年減 20% 為 0 分、持平約 40 分、年增 30% 滿分
     solvency: { debt: [80, 30], current: [1.0, 2.5] },
     cf: { op: [0, 30], free: [0, 20] },          // 營業現金流佔營收 30%、自由現金流佔營收 20% 才滿分
@@ -61,11 +61,14 @@ function calcHealthBreakdown(quarterData) {
         return rev > 0 ? qs.reduce((a, q) => a + q[key], 0) / rev * 100 : null;
     };
 
-    // 獲利力：近 N 季毛利率、營益率
+    // 獲利力：近 N 季毛利率、營益率，加上 ROE（近 4 季淨利 ÷ 平均權益；虧損或權益為負時 ROE 得 0 分）
     const gm = weighted('grossMargin');
     const om = weighted('operatingMargin');
-    const profitScore = avg([mapScore(gm, ...SCORE_CONFIG.profit.gross), mapScore(om, ...SCORE_CONFIG.profit.op)]);
-    const profitNote = [ok(gm) && `毛利率 ${pct(gm)}`, ok(om) && `營益率 ${pct(om)}`].filter(Boolean).join('、');
+    const roeVal = latest.roeStatus === 'ok' ? latest.roe : null;
+    const roeScore = latest.roeStatus === 'loss' || latest.roeStatus === 'negEquity' ? 0 : mapScore(roeVal, ...SCORE_CONFIG.profit.roe);
+    const profitScore = avg([mapScore(gm, ...SCORE_CONFIG.profit.gross), mapScore(om, ...SCORE_CONFIG.profit.op), roeScore]);
+    const roeNote = latest.roeStatus === 'loss' ? 'ROE 虧損' : (latest.roeStatus === 'negEquity' ? 'ROE 不適用（權益為負）' : (ok(roeVal) && `ROE ${pct(roeVal)}`));
+    const profitNote = [ok(gm) && `毛利率 ${pct(gm)}`, ok(om) && `營益率 ${pct(om)}`, roeNote].filter(Boolean).join('、');
 
     // 成長力：有 8 季營收時用「近 4 季合計 vs 前 4 季合計」，否則用近幾季年增率平均
     let yoy = null, growthBasis = '';
@@ -372,6 +375,163 @@ const RULES_CONFIG = {
 };
 
 // ==========================================
+// 3-0. 獲利品質、營運資金、地雷股與配息規則
+// ==========================================
+// 衍生指標由後端 metrics.py 用完整歷史算好、附在每一季（roe、equityMultiplier、apDays、ccc、contractYoY、fscore、mscore、zscore），
+// 配息（dividends）與財報申報狀態（filing）在財報資料的最上層，透過 ctx.stock 取得；沒有 ctx 時（歷史風險分數）這幾條不判斷。
+// onlyTypes：只在這些公司類型檢查；group：規則頁顯示的分類（不影響點擊後切換的財報分頁 tab）
+const pctText = v => `${Math.round(v * 10) / 10}%`;
+
+Object.assign(RULES_CONFIG, {
+    roeDecline: {
+        name: "ROE 連續下滑", level: "yellow", consecutive: 3, minDrop: 3, tab: 'income', group: 'quality', metric: { key: 'roe', unit: '%' },
+        why: (c) => `股東權益報酬率（近 4 季淨利 ÷ 平均權益）連續 ${c.consecutive} 季下降，且累計少 ${c.minDrop} 個百分點以上（賺錢效率轉弱）`,
+        check: (data, config) => {
+            const recent = data.slice(-(config.consecutive + 1));
+            if (recent.length < config.consecutive + 1 || recent.some(q => q.roeStatus !== 'ok' || q.roe == null)) return { status: 'skipped' };
+            const falling = recent.every((q, i) => i === 0 || q.roe < recent[i - 1].roe);
+            const drop = recent[0].roe - recent[recent.length - 1].roe;
+            if (falling && drop >= config.minDrop) {
+                return { status: 'alert', text: `ROE 從 ${pctText(recent[0].roe)} 連續下降到 ${pctText(recent[recent.length - 1].roe)}`, qs: recent.slice(1).map(q => q.q) };
+            }
+            return { status: 'pass' };
+        }
+    },
+    roeLeverage: {
+        name: "ROE 高但靠槓桿撐出來", level: "yellow", roeMin: 15, multiplierMin: 3, tab: 'balance', group: 'quality', metric: { key: 'equityMultiplier', unit: ' 倍' },
+        why: (c) => `ROE 達 ${c.roeMin}% 以上，但權益乘數（平均總資產 ÷ 平均權益）也達 ${c.multiplierMin} 倍以上：報酬主要來自借錢擴大規模，景氣反轉時虧損也會放大（杜邦分析）`,
+        check: (data, config) => {
+            const q = data[data.length - 1];
+            if (q.roeStatus !== 'ok' || q.roe == null || q.equityMultiplier == null) return { status: 'skipped' };
+            if (q.roe >= config.roeMin && q.equityMultiplier >= config.multiplierMin) {
+                return { status: 'alert', text: `ROE ${pctText(q.roe)} = 淨利率 ${pctText(q.netMarginTTM)} × 資產週轉 ${q.assetTurnover} 次 × 權益乘數 ${q.equityMultiplier} 倍`, qs: [q.q] };
+            }
+            return { status: 'pass' };
+        }
+    },
+    cccLengthening: {
+        name: "現金轉換循環連續拉長", level: "yellow", consecutive: 3, minIncrease: 10, tab: 'balance', group: 'workingCapital', metric: { key: 'ccc', unit: ' 天' },
+        why: (c) => `現金轉換循環（應收天數 + 存貨天數 − 應付天數）連續 ${c.consecutive} 季比去年同季長，最新一季多 ${c.minIncrease} 天以上（錢卡在營運中的時間變長）`,
+        check: (data, config) => {
+            const recent = data.slice(-config.consecutive);
+            if (recent.length < config.consecutive) return { status: 'skipped' };
+            const pairs = recent.map(q => [q, sameQuarterLastYear(data, q)]);
+            if (pairs.some(([cur, prev]) => !prev || cur.ccc == null || prev.ccc == null)) return { status: 'skipped' };
+            const [last, lastPrev] = pairs[pairs.length - 1];
+            if (pairs.every(([cur, prev]) => cur.ccc > prev.ccc) && last.ccc - lastPrev.ccc >= config.minIncrease) {
+                return { status: 'alert', text: `現金轉換循環 ${lastPrev.ccc} → ${last.ccc} 天（比去年同季多 ${last.ccc - lastPrev.ccc} 天）`, qs: recent.map(q => q.q) };
+            }
+            return { status: 'pass' };
+        }
+    },
+    payableSpike: {
+        name: "應付帳款天數突然大增", level: "yellow", threshold: 30, minDays: 15, tab: 'balance', group: 'workingCapital', metric: { key: 'apDays', unit: ' 天' },
+        why: (c) => `應付帳款天數比去年同季增加 ${c.threshold}% 以上且多 ${c.minDays} 天以上（可能延後付款給供應商來撐現金）`,
+        check: (data, config) => {
+            const latest = data[data.length - 1];
+            const prev = sameQuarterLastYear(data, latest);
+            if (!prev || latest.apDays == null || !(prev.apDays > 0)) return { status: 'skipped' };
+            const change = (latest.apDays - prev.apDays) / prev.apDays * 100;
+            if (change >= config.threshold && latest.apDays - prev.apDays >= config.minDays) {
+                return { status: 'alert', text: `應付帳款天數 ${prev.apDays} → ${latest.apDays} 天（+${change.toFixed(0)}%）`, qs: [prev.q, latest.q] };
+            }
+            return { status: 'pass' };
+        }
+    },
+    contractLagging: {
+        name: "合約負債成長落後營收", level: "yellow", consecutive: 2, materiality: 10, tab: 'balance', group: 'workingCapital',
+        onlyTypes: ['construction', 'electronics', 'general'], metric: { key: 'contractYoY', unit: '%' },
+        why: (c) => `合約負債（已收款、尚未交貨的訂單）年增率連續 ${c.consecutive} 季為負且低於營收年增率；只看合約負債達單季營收 ${c.materiality}% 以上的公司（設備、營建、工程業）`,
+        check: (data, config) => {
+            const recent = data.slice(-config.consecutive);
+            if (recent.length < config.consecutive || recent.some(q => q.contractYoY == null || q.revenueYoY == null)) return { status: 'skipped' };
+            const latest = recent[recent.length - 1];
+            if (!(latest.contractLiabilities > 0) || !(latest.revenue > 0) || latest.contractLiabilities / latest.revenue * 100 < config.materiality) return { status: 'skipped' };
+            if (recent.every(q => q.contractYoY < 0 && q.contractYoY < q.revenueYoY)) {
+                return { status: 'alert', text: `合約負債年增 ${pctText(latest.contractYoY)}，營收年增 ${pctText(latest.revenueYoY)}（未來可認列的訂單在減少）`, qs: recent.map(q => q.q) };
+            }
+            return { status: 'pass' };
+        }
+    },
+    beneishM: {
+        name: "財報可能被美化（M-score）", level: "yellow", threshold: -1.78, tab: 'income', group: 'redFlag', metric: { key: 'mscore', unit: '' },
+        why: (c) => `Beneish M-score 大於 ${c.threshold}（以應收帳款、毛利率、資產品質、營收成長、折舊、費用、槓桿、應計項目 8 個變數計算）。模型以美國樣本建立，高成長公司分數容易偏高，只當輔助訊號`,
+        check: (data, config) => {
+            const q = data[data.length - 1];
+            if (!q.mscore || q.mscore.score == null) return { status: 'skipped' };
+            if (q.mscore.score > config.threshold) {
+                const c = q.mscore.components;
+                const top = [['DSRI', '應收帳款相對營收'], ['SGI', '營收成長'], ['TATA', '應計項目'], ['GMI', '毛利率變差'], ['AQI', '資產品質']]
+                    .filter(([k]) => (k === 'TATA' ? c[k] > 0.03 : c[k] > 1.15)).map(([, n]) => n);
+                return { status: 'alert', text: `M-score ${q.mscore.score}${top.length ? `，主要來自：${top.join('、')}` : ''}`, qs: [q.q] };
+            }
+            return { status: 'pass' };
+        }
+    },
+    altmanZ: {
+        name: "破產風險偏高（Z-score）", level: "yellow", tab: 'balance', group: 'redFlag',
+        why: () => `Altman Z-score 落在危險區。電子、傳產等製造業用原始 Z-score（需要市值，低於 1.81 為危險區），其他產業用 Z''-score（只用帳面數字，低於 1.1 為危險區）。原始模型以美國製造業建立，和違約距離一起看`,
+        check: (data, config, ctx) => {
+            if (!ctx) return { status: 'skipped' };  // 歷史風險分數不判斷（需要最新市值）
+            const r = altmanZFor(data[data.length - 1], ctx);
+            if (!r) return { status: 'skipped' };
+            if (r.zone === 'distress') return { status: 'alert', text: `${r.label} ${r.value}（危險區門檻 ${r.distress}）`, qs: [data[data.length - 1].q] };
+            return { status: 'pass' };
+        }
+    },
+    lateFiling: {
+        name: "財報可能延遲申報", level: "yellow", tab: 'income', group: 'redFlag',
+        why: () => `已超過法定公布期限 10 天（Q1 5/15、Q2 8/14、Q3 11/14、年報 3/31），系統仍查不到這一季財報。可能延遲申報，也可能是資料源尚未收錄；延遲申報的公司會被交易所改為全額交割`,
+        check: (data, config, ctx) => {
+            const f = ctx && ctx.stock && ctx.stock.filing;
+            if (!f || f.status === 'unknown') return { status: 'skipped' };
+            if (f.status === 'late') return { status: 'alert', text: `${f.expected} 財報期限 ${f.deadline}，目前最新只有 ${f.latest || '—'}` };
+            return { status: 'pass' };
+        }
+    },
+    payoutHigh: {
+        name: "盈餘分配率過高", level: "dynamic", yellowAbove: 80, redAbove: 100, tab: 'cashflow', group: 'dividend', onlyTypes: ['dividend'],
+        why: (c) => `最近一個完整年度的現金股利 ÷ 每股盈餘超過 ${c.yellowAbove}% 為黃燈、超過 ${c.redAbove}%（配出的錢比賺的多）或虧損仍配息為紅燈`,
+        check: (data, config, ctx) => {
+            const years = ctx && ctx.stock && ctx.stock.dividends && ctx.stock.dividends.years;
+            const y = years && years.filter(d => d.complete && d.cash > 0 && (d.payout != null || d.lossPayout)).pop();
+            if (!y) return { status: 'skipped' };
+            if (y.lossPayout) return { status: 'alert', level: 'red', text: `${y.year} 年每股盈餘 ${y.eps} 元（虧損），仍配發現金股利 ${y.cash} 元` };
+            if (y.payout > config.redAbove) return { status: 'alert', level: 'red', text: `${y.year} 年盈餘分配率 ${y.payout}%（股利 ${y.cash} 元 ÷ EPS ${y.eps} 元）` };
+            if (y.payout > config.yellowAbove) return { status: 'alert', level: 'yellow', text: `${y.year} 年盈餘分配率 ${y.payout}%（股利 ${y.cash} 元 ÷ EPS ${y.eps} 元）` };
+            return { status: 'pass' };
+        }
+    },
+    dividendNotCovered: {
+        name: "自由現金流不足以支付股利", level: "yellow", years: 3, tab: 'cashflow', group: 'dividend', onlyTypes: ['dividend'],
+        why: (c) => `近 ${c.years} 個完整年度的自由現金流合計，少於同期間發出的現金股利總額（股利可能靠借款或存款支付，難以持續）`,
+        check: (data, config, ctx) => {
+            const years = ctx && ctx.stock && ctx.stock.dividends && ctx.stock.dividends.years;
+            const done = (years || []).filter(d => d.complete && d.totalCash > 0 && d.fcf != null).slice(-config.years);
+            if (done.length < config.years) return { status: 'skipped' };
+            const fcf = done.reduce((a, d) => a + d.fcf, 0), paid = done.reduce((a, d) => a + d.totalCash, 0);
+            if (fcf < paid) return { status: 'alert', text: `${done[0].year}～${done[done.length - 1].year} 年自由現金流合計 ${Math.round(fcf).toLocaleString()} 百萬，現金股利 ${Math.round(paid).toLocaleString()} 百萬` };
+            return { status: 'pass' };
+        }
+    }
+});
+
+// Altman Z：製造業用原始 Z（需要市值），其他用 Z''；回傳 { label, value, zone, distress } 或 null
+const Z_MANUFACTURING = ['electronics', 'cyclical'];
+function altmanZFor(q, ctx) {
+    const z = q && q.zscore;
+    if (!z) return null;
+    const mcap = ctx && ctx.market && ctx.market.ddInputs && ctx.market.ddInputs.marketCap; // 億元
+    if (ctx && Z_MANUFACTURING.includes(ctx.effectiveType) && mcap && z.totalLiab > 0 && z.salesTA != null) {
+        const v = 1.2 * z.x1 + 1.4 * z.x2 + 3.3 * z.x3 + 0.6 * (mcap * 100 / z.totalLiab) + 1.0 * z.salesTA;
+        const value = Math.round(v * 100) / 100;
+        return { label: 'Z-score', value, zone: value < 1.81 ? 'distress' : (value < 2.99 ? 'grey' : 'safe'), distress: 1.81, safe: 2.99 };
+    }
+    if (z.zpp == null) return null;
+    return { label: "Z''-score", value: z.zpp, zone: z.zpp < 1.1 ? 'distress' : (z.zpp < 2.6 ? 'grey' : 'safe'), distress: 1.1, safe: 2.6 };
+}
+
+// ==========================================
 // 3-1. 股價規則（market: true）
 // ==========================================
 // 股價資料由後端 /api/prices/risk 計算，存在瀏覽器 localStorage（market_risk），analyzeData 以 ctx.market 傳入。
@@ -483,6 +643,30 @@ Object.assign(RULES_CONFIG, {
             if (dd < config.yellowBelow) return { status: 'alert', level: 'yellow', text: `違約距離 ${dd}${detail}` };
             return { status: 'pass' };
         }
+    },
+    // 董監事持股：證交所、櫃買中心「董監事持股餘額明細」（每月），由 /api/prices/risk 一起回傳
+    pledgeHigh: {
+        name: "董監事質押比偏高", level: "yellow", threshold: 50, tab: 'market', market: true, group: 'governance',
+        why: (c) => `董事、監察人（含法人代表人）設質股數 ÷ 目前持股超過 ${c.threshold}%。股價下跌時可能被追繳、斷頭賣壓，也代表大股東資金吃緊`,
+        check: (data, config, ctx) => {
+            const ins = ctx && ctx.market && ctx.market.insider;
+            if (!ins || ins.pledgeRatio == null) return { status: 'skipped' };
+            if (ins.pledgeRatio > config.threshold) return { status: 'alert', text: `${ins.ym} 董監事質押比 ${ins.pledgeRatio}%（設質 ${ins.pledgedLots.toLocaleString()} 張 ÷ 持股 ${ins.holdingLots.toLocaleString()} 張）` };
+            return { status: 'pass' };
+        }
+    },
+    insiderSelling: {
+        name: "董監事持股持續減少", level: "yellow", months: 2, minDrop: 3, tab: 'market', market: true, group: 'governance',
+        why: (c) => `董監事持股合計連續 ${c.months} 個月減少，且累計減少 ${c.minDrop}% 以上（系統從開始記錄後逐月比較）`,
+        check: (data, config, ctx) => {
+            const ins = ctx && ctx.market && ctx.market.insider;
+            const ch = ins && ins.changes;  // 新到舊的每月變化（%）
+            if (!ch || ch.length < config.months) return { status: 'skipped' };
+            const recent = ch.slice(0, config.months);
+            const total = (recent.reduce((a, c) => a * (1 + c / 100), 1) - 1) * 100;
+            if (recent.every(c => c < 0) && total <= -config.minDrop) return { status: 'alert', text: `近 ${config.months} 個月董監事持股合計減少 ${Math.abs(total).toFixed(1)}%` };
+            return { status: 'pass' };
+        }
     }
 });
 
@@ -497,7 +681,7 @@ const TYPE_PROFILES = {
     electronics: {
         label: "電子製造/半導體",
         desc: "資本支出大、擴產與備貨期營運資金需求高，自由現金流為負、營業現金流略低於淨利屬常態；景氣循環明顯，存貨天數波動較大。",
-        overrides: { negativeFreeCF: { disabled: true }, inventoryBuildup: { threshold: 30 }, cashFlowQuality: { threshold: 0.8 } }
+        overrides: { negativeFreeCF: { disabled: true }, inventoryBuildup: { threshold: 30 }, cashFlowQuality: { threshold: 0.8 }, cccLengthening: { minIncrease: 15 } }
     },
     cyclical: {
         label: "傳產/景氣循環",
@@ -517,7 +701,7 @@ const TYPE_PROFILES = {
     },
     dividend: {
         label: "高股息/存股型",
-        desc: "股利需要穩定的獲利與現金，對毛利率、獲利含金量與負債更嚴格。",
+        desc: "股利需要穩定的獲利與現金，對毛利率、獲利含金量與負債更嚴格，並檢查盈餘分配率與自由現金流是否足以支付股利。",
         overrides: {
             grossMarginDrop: { consecutive: 2 }, profitButNoCash: { level: "red" },
             cashFlowQuality: { level: "red" }, debtRising: { consecutive: 2 }
@@ -535,19 +719,22 @@ const TYPE_PROFILES = {
             highDebtRatio: { threshold: 80 }, revenueDecline: { consecutive: 4 }, lowQuickRatio: { disabled: true },
             inventoryBuildup: { disabled: true }, receivableBuildup: { disabled: true }, negativeOperatingCF: { disabled: true },
             cashFlowQuality: { disabled: true }, profitButNoCash: { disabled: true }, negativeFreeCF: { disabled: true },
-            financingSupportedCash: { disabled: true }
+            financingSupportedCash: { disabled: true }, cccLengthening: { disabled: true }, payableSpike: { disabled: true },
+            roeLeverage: { multiplierMin: 4 }
         }
     },
     financial: {
         label: "金融業",
-        desc: "金融業報表結構不同（以利差與手續費為主、高槓桿屬常態），毛利、流動比率、存貨與現金流指標不適用，僅檢查營收與本業獲利趨勢。",
+        desc: "金融業報表結構不同（以利差與手續費為主、高槓桿屬常態），毛利、流動比率、存貨與現金流指標不適用；M-score、Z-score 也不適用。檢查營收、本業獲利與 ROE 趨勢。",
         overrides: {
             lowCurrentRatio: { disabled: true }, lowQuickRatio: { disabled: true }, highDebtRatio: { disabled: true }, debtRising: { disabled: true },
             grossMarginDrop: { disabled: true }, grossMarginPlunge: { disabled: true }, marginSqueezeOnGrowth: { disabled: true },
             expenseSqueeze: { disabled: true }, profitDivergence: { disabled: true }, lowInterestCoverage: { disabled: true },
             receivableBuildup: { disabled: true }, inventoryBuildup: { disabled: true },
             cashFlowQuality: { disabled: true }, profitButNoCash: { disabled: true }, negativeOperatingCF: { disabled: true },
-            negativeFreeCF: { disabled: true }, financingSupportedCash: { disabled: true }
+            negativeFreeCF: { disabled: true }, financingSupportedCash: { disabled: true },
+            roeLeverage: { disabled: true }, cccLengthening: { disabled: true }, payableSpike: { disabled: true },
+            contractLagging: { disabled: true }, beneishM: { disabled: true }, altmanZ: { disabled: true }
         }
     }
 };
@@ -573,6 +760,7 @@ function generateSummary(alerts, skipped, status, quarters) {
     if (latest.operatingCF > 0 && latest.freeCF > 0) pros.push('營業與自由現金流皆為正');
     else if (latest.operatingCF > 0) pros.push('維持正向營業現金流');
 
+    if (latest.roeStatus === 'ok' && latest.roe >= 15) pros.push(`ROE 達 ${latest.roe}%`);
     if (latest.grossMargin != null && latest.grossMargin > 20) pros.push(`毛利率達 ${latest.grossMargin}%`);
     if (latest.debtRatio != null && latest.debtRatio < 50) pros.push(`負債比 ${latest.debtRatio}% 體質穩健`);
 
@@ -632,6 +820,7 @@ function getEffectiveRules(type) {
     for (const [key, baseConfig] of Object.entries(RULES_CONFIG)) {
         const override = profile.overrides[key] || {};
         if (override.disabled) continue;
+        if (baseConfig.onlyTypes && !baseConfig.onlyTypes.includes(type)) continue;
         effective[key] = { ...baseConfig, ...override };
     }
     return effective;
@@ -678,7 +867,7 @@ function analyzeData(stockId, data) {
     let riskScore = 0;
 
     // 先跑財報規則，再跑股價規則（股價規則要知道財報是否已有紅燈）
-    const ctx = { market: loadMarketRisk()[stockId] || null, effectiveType, hasFinancialRed: false };
+    const ctx = { market: loadMarketRisk()[stockId] || null, effectiveType, hasFinancialRed: false, stock: data };
     const keys = Object.keys(rules);
     const ordered = [...keys.filter(k => !rules[k].market), ...keys.filter(k => rules[k].market)];
     for (const key of ordered) {
